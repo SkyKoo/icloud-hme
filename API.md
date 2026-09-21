@@ -289,11 +289,14 @@ GET /api/inbox?account_id=acc_1&folder=all&alias=xyz123@icloud.com&limit=20&days
 响应的 `data.folder` 表示所选范围，`messages[].folder` 为该邮件的 `inbox` 或 `junk` 来源。
 合并时按邮件时间倒序，保留不同文件夹内相同编号的邮件；查询不会移动邮件或修改垃圾分类。
 任一文件夹读取失败时返回错误，不将部分结果当成完整结果。Web API 从邮件头读取发件人、收件人和主题，并批量获取摘要。
+IMAP 摘要解析嵌套 MIME、Base64、quoted-printable 及字符集，优先正文 text/plain，
+否则将 HTML 转为纯文本；附件内容不进入摘要。
 
 邮件详情 `GET /api/inbox/:message_id` 接受 `account_id`、`folder=inbox|junk` 和
 `method=imap|web_api`，必须使用列表返回的 UID、来源文件夹和读取方式。
 为兼容旧 IMAP 客户端，省略时默认 `folder=inbox&method=imap`，不能使用合并范围 `all`。
-Web 正文读取保留已读状态，HTML 转为纯文本，不下载附件或加载外部图片。
+IMAP 与 Web 正文均返回 `content_type=text/plain`，保留已读状态，不加载外部图片。
+IMAP 从完整邮件中提取正文并排除附件；Web API 只请求正文部分，不下载附件。
 
 删除 `DELETE /api/inbox/:message_id` 仅支持 IMAP，接受同样的账号与文件夹参数；
 `method=web_api` 会被拒绝，不能将 iCloud Web UID 用于外部 IMAP 邮箱。

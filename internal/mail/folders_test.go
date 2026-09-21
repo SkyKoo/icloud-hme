@@ -83,7 +83,7 @@ func TestIMAPFolderReadsAndDeleteDoNotCrossUIDs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		body := fmt.Sprintf("From: sender@example.com\r\nTo: alias@icloud.com\r\nSubject: %s subject\r\nDate: %s\r\nContent-Type: text/plain\r\n\r\n%s body", folder, time.Now().Format(time.RFC1123Z), folder)
+		body := fmt.Sprintf("From: sender@example.com\r\nTo: alias@icloud.com\r\nSubject: %s subject\r\nDate: %s\r\n", folder, time.Now().Format(time.RFC1123Z)) + strings.ReplaceAll(alternativeBody, "验证码 123456", folder+" body")
 		box.(*memory.Mailbox).Messages = []*memory.Message{{Uid: 6, Date: time.Now(), Size: uint32(len(body)), Body: []byte(body)}}
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -105,16 +105,23 @@ func TestIMAPFolderReadsAndDeleteDoNotCrossUIDs(t *testing.T) {
 	}
 	c := &Client{cli: cli}
 	messages, err := c.ListInbox(20, 7, FolderJunk)
-	if err != nil || len(messages) != 1 || messages[0].Subject != "Junk subject" {
+	if err != nil || len(messages) != 1 || messages[0].Subject != "Junk subject" || messages[0].Preview != "Junk body" {
 		t.Fatalf("junk listing: %#v %v", messages, err)
 	}
 	messages, err = c.FindByRecipient("alias@icloud.com", 20, 7, FolderJunk)
-	if err != nil || len(messages) != 1 || messages[0].Subject != "Junk subject" {
+	if err != nil || len(messages) != 1 || messages[0].Subject != "Junk subject" || messages[0].Preview != "Junk body" {
 		t.Fatalf("junk alias query: %#v %v", messages, err)
 	}
 	full, err := c.GetFull(6, FolderJunk)
-	if err != nil || !strings.Contains(full.Body, "Junk body") {
+	if err != nil || full.Body != "Junk body" || full.ContentType != "text/plain" {
 		t.Fatalf("wrong detail: %#v %v", full, err)
+	}
+	// 删除前检查目标邮件，确保摘要、搜索和详情读取均未设置 Seen。
+	box, _ := user.GetMailbox("Junk")
+	for _, flag := range box.(*memory.Mailbox).Messages[0].Flags {
+		if flag == imap.SeenFlag {
+			t.Fatal("reading the junk message marked it read")
+		}
 	}
 	if err := c.Delete(6, FolderJunk); err != nil {
 		t.Fatal(err)

@@ -6,9 +6,7 @@ package mail
 
 import (
 	"fmt"
-	"io"
 	"mime"
-	"mime/quotedprintable"
 	"net/mail"
 	"sort"
 	"strings"
@@ -386,7 +384,8 @@ func (c *Client) GetFull(uid uint32, folders ...string) (*FullMessage, error) {
 	seqset := new(imap.SeqSet)
 	seqset.AddNum(uid)
 
-	items := []imap.FetchItem{imap.FetchUid, imap.FetchEnvelope, imap.FetchInternalDate, imap.FetchRFC822}
+	section := &imap.BodySectionName{Peek: true}
+	items := []imap.FetchItem{imap.FetchUid, imap.FetchEnvelope, imap.FetchInternalDate, section.FetchItem()}
 	messages := make(chan *imap.Message, 1)
 	done := make(chan error, 1)
 	go func() {
@@ -401,14 +400,19 @@ func (c *Client) GetFull(uid uint32, folders ...string) (*FullMessage, error) {
 		return nil, fmt.Errorf("邮件不存在 (uid=%d)", uid)
 	}
 
-	full := &FullMessage{Message: toMessage(msg)}
-	// 解析正文
-	if r := msg.GetBody(&imap.BodySectionName{}); r != nil {
-		if em, err := mail.ReadMessage(r); err == nil {
-			body, _ := readBody(em)
-			full.Body = body
-			full.ContentType = em.Header.Get("Content-Type")
-		}
+	full := &FullMessage{Message: toMessage(msg), ContentType: "text/plain"}
+	// 摘要和详情使用同一 MIME 解析器；响应始终为已解码的纯文本。
+	r := msg.GetBody(section)
+	if r == nil {
+		return nil, fmt.Errorf("邮件正文缺失")
+	}
+	em, err := mail.ReadMessage(r)
+	if err != nil {
+		return nil, fmt.Errorf("解析邮件失败: %w", err)
+	}
+	full.Body, err = readBody(em)
+	if err != nil {
+		return nil, fmt.Errorf("解析邮件正文失败: %w", err)
 	}
 	return full, nil
 }
@@ -500,28 +504,4 @@ func decodeHeader(s string) string {
 		return s
 	}
 	return out
-}
-
-// readBody 读取邮件正文,优先 text/plain,其次从 HTML 提取纯文本。
-func readBody(msg *mail.Message) (string, error) {
-	ct := msg.Header.Get("Content-Type")
-	if strings.HasPrefix(ct, "text/html") {
-		raw, _ := io.ReadAll(msg.Body)
-		// quoted-printable 解码
-		if strings.Contains(msg.Header.Get("Content-Transfer-Encoding"), "quoted-printable") {
-			r := quotedprintable.NewReader(strings.NewReader(string(raw)))
-			raw, _ = io.ReadAll(r)
-		}
-		return sanitizePreview(string(raw)), nil
-	}
-	// 默认当 text/plain
-	raw, err := io.ReadAll(msg.Body)
-	if err != nil {
-		return "", err
-	}
-	if strings.Contains(msg.Header.Get("Content-Transfer-Encoding"), "quoted-printable") {
-		r := quotedprintable.NewReader(strings.NewReader(string(raw)))
-		raw, _ = io.ReadAll(r)
-	}
-	return sanitizePlainPreview(string(raw)), nil
 }
