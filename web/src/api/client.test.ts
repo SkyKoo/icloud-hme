@@ -1,11 +1,12 @@
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { request, setCSRFToken } from './client'
+import { request, setCSRFToken, registerUnauthorizedHandler } from './client'
 import { server } from '../test/server'
 
 describe('api client', () => {
   beforeEach(() => {
     setCSRFToken(null)
+    registerUnauthorizedHandler(null)
     server.resetHandlers()
   })
 
@@ -35,13 +36,13 @@ describe('api client', () => {
     })
   })
 
-  it('非 JSON 响应抛出网络错误', async () => {
+  it('非 JSON 网关错误保留 HTTP 状态并提示重试', async () => {
     server.use(
       http.get('/api/accounts', () =>
         new HttpResponse('<html>bad</html>', { status: 502 }),
       ),
     )
-    await expect(request('/api/accounts')).rejects.toThrow('网络连接失败')
+    await expect(request('/api/accounts')).rejects.toMatchObject({ status: 502, code: 'GATEWAY_ERROR', message: '服务暂时不可用（HTTP 502），请稍后重试' })
   })
 
   it('401 触发全局回调', async () => {
@@ -56,6 +57,46 @@ describe('api client', () => {
     )
     request('/api/accounts', undefined, onUnauthorized).catch(() => {})
     await vi.waitFor(() => expect(onUnauthorized).toHaveBeenCalled())
+  })
+
+  it('iCloud 会话失效提示更新凭据，但不触发管理台退出', async () => {
+    const onUnauthorized = vi.fn()
+    const globalUnauthorized = vi.fn()
+    registerUnauthorizedHandler(globalUnauthorized)
+    server.use(
+      http.get('/api/aliases', () => HttpResponse.json(
+        { success: false, code: 'UPSTREAM_UNAUTHORIZED', message: 'iCloud 会话已失效，请到「账号」更新 Cookie 或重新登录 iCloud' },
+        { status: 401 },
+      )),
+    )
+    await expect(request('/api/aliases', undefined, onUnauthorized)).rejects.toMatchObject({
+      status: 401, code: 'UPSTREAM_UNAUTHORIZED', message: expect.stringContaining('更新 Cookie'),
+    })
+    expect(onUnauthorized).not.toHaveBeenCalled()
+    expect(globalUnauthorized).not.toHaveBeenCalled()
+    registerUnauthorizedHandler(null)
+  })
+
+  it('Cloudflare 错误 JSON 不使用模糊提示或泄露代理细节', async () => {
+    server.use(http.get('/api/aliases', () => HttpResponse.json(
+      { type: 'about:blank', title: 'Bad Gateway', status: 502, detail: 'private upstream details' },
+      { status: 502 },
+    )))
+    await expect(request('/api/aliases')).rejects.toMatchObject({
+      status: 502, code: 'GATEWAY_ERROR', message: '服务暂时不可用（HTTP 502），请稍后重试',
+    })
+  })
+
+  it('非 JSON 的 401 仍触发管理台退出', async () => {
+    const onUnauthorized = vi.fn()
+    server.use(http.get('/api/accounts', () => new HttpResponse('Unauthorized', { status: 401 })))
+    await expect(request('/api/accounts', undefined, onUnauthorized)).rejects.toMatchObject({ status: 401 })
+    expect(onUnauthorized).toHaveBeenCalledOnce()
+  })
+
+  it.each([null, {}, [], 'unexpected'])('拒绝无效的成功响应 %j', async (body) => {
+    server.use(http.get('/api/accounts', () => HttpResponse.json(body)))
+    await expect(request('/api/accounts')).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
   })
 
   it('GET 不带 CSRF,POST 自动带 CSRF', async () => {

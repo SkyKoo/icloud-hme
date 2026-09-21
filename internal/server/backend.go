@@ -185,7 +185,7 @@ func classifyLoginErr(err error) *BackendError {
 		return &BackendError{Status: http.StatusNotFound, Code: "ACCOUNT_NOT_FOUND", Message: "账号不存在"}
 	}
 	if isSessionError(msg) {
-		return &BackendError{Status: http.StatusUnauthorized, Code: "UPSTREAM_UNAUTHORIZED", Message: "iCloud 会话失效,请更新 Cookie"}
+		return &BackendError{Status: http.StatusUnauthorized, Code: "UPSTREAM_UNAUTHORIZED", Message: "iCloud 会话已失效，请到「账号」更新 Cookie 或重新登录 iCloud"}
 	}
 	return &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: "iCloud 登录失败,请稍后重试"}
 }
@@ -295,7 +295,7 @@ func (b *managerBackend) ListInbox(q InboxQuery) (InboxResult, error) {
 			return wmc.ListInbox(q.Limit, folder)
 		})
 		if err != nil {
-			return InboxResult{}, &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: "读取邮件失败，请尝试单独查询收件箱或垃圾邮件"}
+			return InboxResult{}, classifyUpstreamErr("读取邮件失败，请稍后重试", err)
 		}
 		method = "web_api"
 	}
@@ -326,7 +326,7 @@ func (b *managerBackend) GetWebMessage(accountID string, uid uint32, folder stri
 	}
 	message, err := mc.GetFull(uid, folder)
 	if err != nil {
-		return nil, &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: "读取邮件详情失败，邮件可能已移动或会话已失效"}
+		return nil, classifyUpstreamErr("读取邮件详情失败，邮件可能已移动或暂时无法读取", err)
 	}
 	return message, nil
 }
@@ -372,7 +372,7 @@ func classifyUpstreamErr(fixedMsg string, err error) *BackendError {
 		return nil
 	}
 	if isSessionError(err.Error()) {
-		return &BackendError{Status: http.StatusUnauthorized, Code: "UPSTREAM_UNAUTHORIZED", Message: "iCloud 会话失效,请更新 Cookie"}
+		return &BackendError{Status: http.StatusUnauthorized, Code: "UPSTREAM_UNAUTHORIZED", Message: "iCloud 会话已失效，请到「账号」更新 Cookie 或重新登录 iCloud"}
 	}
 	return &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: fixedMsg}
 }
@@ -380,7 +380,7 @@ func classifyUpstreamErr(fixedMsg string, err error) *BackendError {
 // isSessionError 判断错误是否由会话失效引起。
 func isSessionError(msg string) bool {
 	m := strings.ToLower(msg)
-	return strings.Contains(m, "401") || strings.Contains(m, "403") ||
+	return strings.Contains(m, "401") || strings.Contains(m, "403") || strings.Contains(m, "http 421") ||
 		strings.Contains(m, "session") || strings.Contains(m, "cookie") ||
 		strings.Contains(m, "unauthorized") || strings.Contains(m, "认证") ||
 		strings.Contains(m, "会话校验失败")

@@ -330,8 +330,8 @@ func (c *Client) request(method, rawURL string, body any, timeout time.Duration,
 				snippet = snippet[:200]
 			}
 			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, snippet)
-			// 401/403 说明 Cookie 失效,不重试直接返回。
-			if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			// iCloud 的 421 同样表示会话失效，重试不能恢复认证。
+			if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 421 {
 				return "", lastErr
 			}
 			if attempt < maxAttempts {

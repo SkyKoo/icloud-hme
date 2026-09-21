@@ -30,6 +30,7 @@ HTTP JSON API，所有接口返回统一格式：
 - 会话 Cookie：`hme_session`，`Path=/`、`HttpOnly`、`SameSite=Strict`；TLS 部署时设置 `ICLOUD_HME_SECURE_COOKIE=true` 启用 `Secure`
 - 任何账号响应**绝不包含** `cookies`、`app_password`、`proxy` 字段（代理只暴露 `has_proxy` 布尔值）
 - 用户可见错误消息不拼接上游响应体或秘密
+- iCloud 返回 401/403/421 时，别名、Web 邮件列表及详情返回 `401 UPSTREAM_UNAUTHORIZED`，提示更新 Cookie 或重新登录 iCloud；这不会退出管理台。管理台自身会话失效仍返回 `401 AUTH_REQUIRED`，需要重新登录管理台。
 
 ---
 

@@ -1,7 +1,12 @@
 package hme
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -51,6 +56,32 @@ func TestRequestOrigin(t *testing.T) {
 		t.Run(tt.url, func(t *testing.T) {
 			if got := requestOrigin(tt.url); got != tt.want {
 				t.Fatalf("requestOrigin(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
+// iCloud uses 421 for an expired web session, not a transient gateway failure.
+func TestExpiredSessionDoesNotRetry(t *testing.T) {
+	for _, status := range []int{401, 403, 421} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			var calls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"success":false,"error":1}`))
+			}))
+			defer upstream.Close()
+			client, err := NewClient(nil, "icloud.com", "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.request("POST", upstream.URL+"/validate", nil, 0, MaxRetries)
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("HTTP %d", status)) {
+				t.Fatalf("expected HTTP %d error, got %v", status, err)
+			}
+			if calls.Load() != 1 {
+				t.Fatalf("expired session was retried: %d calls", calls.Load())
 			}
 		})
 	}

@@ -39,13 +39,14 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
  * 唯一的 fetch 入口。
  *
  * 统一设置 Accept、JSON Content-Type 与 credentials: same-origin;
- * 非 GET/HEAD/OPTIONS 自动携带 X-CSRF-Token;401 触发 onUnauthorized 回调。
+ * 非 GET/HEAD/OPTIONS 自动携带 X-CSRF-Token;管理台会话失效时触发 onUnauthorized。
  */
 export async function request<T>(
   path: string,
   init?: RequestOptions,
   onUnauthorized?: () => void,
-): Promise<T> {  const headers = new Headers(init?.headers)
+): Promise<T> {
+  const headers = new Headers(init?.headers)
   headers.set('Accept', 'application/json')
   headers.set('Content-Type', 'application/json')
 
@@ -72,24 +73,34 @@ export async function request<T>(
     throw new ApiError(0, 'NETWORK_ERROR', '网络连接失败，请检查服务状态')
   }
 
-  if (resp.status === 401) {
+  let payload: ApiResponse<T> | null = null
+  try {
+    const parsed: unknown = await resp.json()
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      payload = parsed as ApiResponse<T>
+    }
+  } catch {
+    // 代理可能返回 HTML 错误页，仍按 HTTP 状态提供可操作的提示。
+  }
+
+  // iCloud 与管理台是两套会话；更新 iCloud 凭据需要继续保留管理台登录。
+  if (resp.status === 401 && payload?.code !== 'UPSTREAM_UNAUTHORIZED') {
     onUnauthorized?.()
     unauthorizedHandler?.()
   }
 
-  let payload: ApiResponse<T>
-  try {
-    payload = (await resp.json()) as ApiResponse<T>
-  } catch {
-    throw new ApiError(resp.status, 'INVALID_RESPONSE', '网络连接失败，请检查服务状态')
-  }
-
-  if (!resp.ok || payload.success === false) {
+  if (!resp.ok || payload?.success === false) {
+    const gatewayError = resp.status >= 500
     throw new ApiError(
       resp.status,
-      payload.code ?? 'INTERNAL_ERROR',
-      payload.message ?? '请求失败',
+      typeof payload?.code === 'string' ? payload.code : gatewayError ? 'GATEWAY_ERROR' : 'INTERNAL_ERROR',
+      typeof payload?.message === 'string' && payload.message
+        ? payload.message
+        : gatewayError ? `服务暂时不可用（HTTP ${resp.status}），请稍后重试` : '请求失败',
     )
+  }
+  if (payload?.success !== true) {
+    throw new ApiError(resp.status, 'INVALID_RESPONSE', '服务返回了无效响应，请刷新后重试')
   }
   return payload.data as T
 }
