@@ -168,13 +168,14 @@ POST /api/create
 #### 读取邮件
 
 ```bash
-GET /api/inbox?account_id=acc_1&alias=xyz123@icloud.com&limit=20&days=7
+GET /api/inbox?account_id=acc_1&folder=all&alias=xyz123@icloud.com&limit=20&days=7
 
 # 参数说明:
 #   account_id - 必填: 账号 ID
 #   alias      - 可选: 只读取发到该别名的邮件
-#   limit      - 可选: 返回邮件数量 (默认 20)
-#   days       - 可选: 查找最近几天的邮件 (默认 7,仅 IMAP 模式)
+#   folder     - 可选: all（默认，收件箱＋垃圾邮件）/ inbox / junk
+#   limit      - 可选: 合并后返回邮件总数 (默认 20)
+#   days       - 可选: 查找最近几天的邮件 (默认 7，两种读取方式均生效)
 
 # 响应
 {
@@ -451,6 +452,13 @@ App Password 用于 IMAP 读取邮件,是邮件读取的优先路径 (支持服�
 2. **回退: Web API (Cookie)** — 无 App Password 或 IMAP 失败时,通过 `mccgateway` 端点读取,本地按别名过滤
 
 响应中包含 `"method": "web_api"` 或 `"method": "imap"` 字段,标识实际使用的读取方式。
+
+管理界面默认合并查询收件箱与垃圾邮件，可切换为单独查询；每封摘要的 `folder` 标识来源，
+合并后按时间倒序排列并应用总条数限制。查询不移动邮件或修改其垃圾分类。
+IMAP 自动识别垃圾邮件文件夹；Web API 使用 iCloud 的 `Junk` 文件夹。任一范围读取失败
+会报错，可切换到单个文件夹排查。Web API 摘要可能不包含收件人，按别名本地过滤可能漏信，
+此时选择别名“全部”或配置 IMAP。Web API 模式仅展示摘要，不提供基于 IMAP UID 的详情和删除操作。
+
 
 ## 项目架构
 

@@ -42,6 +42,8 @@ type fakeBackend struct {
 	aliasDeleteID  string
 	aliasDeleteErr error
 	listInboxQuery InboxQuery
+	detailFolder   string
+	deletedFolder  string
 	reloadCount    int
 }
 
@@ -130,11 +132,15 @@ func (f *fakeBackend) ListInbox(q InboxQuery) (InboxResult, error) {
 	return f.inbox, nil
 }
 
-func (f *fakeBackend) GetMessage(accountID string, uid uint32) (*mail.FullMessage, error) {
+func (f *fakeBackend) GetMessage(accountID string, uid uint32, folder string) (*mail.FullMessage, error) {
+	f.detailFolder = folder
 	return &mail.FullMessage{Message: mail.Message{ID: fmt.Sprint(uid)}}, nil
 }
 
-func (f *fakeBackend) DeleteMessage(accountID string, uid uint32) error { return nil }
+func (f *fakeBackend) DeleteMessage(accountID string, uid uint32, folder string) error {
+	f.deletedFolder = folder
+	return nil
+}
 
 func (f *fakeBackend) Reload() error {
 	f.reloadCount++

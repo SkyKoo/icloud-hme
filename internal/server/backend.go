@@ -25,6 +25,7 @@ func (e *BackendError) Error() string { return e.Message }
 
 // InboxQuery 是收件箱查询参数。
 type InboxQuery struct {
+	Folder    string
 	AccountID string
 	Alias     string
 	Limit     int
@@ -33,6 +34,7 @@ type InboxQuery struct {
 
 // InboxResult 是收件箱查询结果。
 type InboxResult struct {
+	Folder    string         `json:"folder"`
 	AccountID string         `json:"account_id"`
 	Alias     string         `json:"alias,omitempty"`
 	Count     int            `json:"count"`
@@ -56,8 +58,8 @@ type Backend interface {
 	SetAliasActive(string, string, bool) (bool, error)
 	DeleteAlias(string, string) error
 	ListInbox(InboxQuery) (InboxResult, error)
-	GetMessage(string, uint32) (*mail.FullMessage, error)
-	DeleteMessage(string, uint32) error
+	GetMessage(string, uint32, string) (*mail.FullMessage, error)
+	DeleteMessage(string, uint32, string) error
 	Reload() error
 }
 
@@ -261,49 +263,45 @@ func (b *managerBackend) DeleteAlias(accountID, anonymousID string) error {
 
 // ListInbox 读取收件箱摘要:IMAP (App Password) 优先,Web API (Cookie) 回退。
 func (b *managerBackend) ListInbox(q InboxQuery) (InboxResult, error) {
-	// 优先使用 IMAP 连接池 (App Password 认证,复用长连接)
-	var imapMessages []mail.Message
+	scope := q.Folder
+	if scope == "" {
+		scope = mail.FolderAll
+	}
+	if !mail.ValidFolder(scope, true) {
+		return InboxResult{}, &BackendError{Status: http.StatusBadRequest, Code: "VALIDATION_ERROR", Message: "无效邮件范围"}
+	}
+	var messages []mail.Message
 	poolErr := b.mgr.WithMailClient(q.AccountID, func(mc *mail.Client) error {
-		var e error
-		if q.Alias != "" {
-			imapMessages, e = mc.FindByRecipient(q.Alias, q.Limit, q.Days)
-		} else {
-			imapMessages, e = mc.ListInbox(q.Limit, q.Days)
-		}
-		return e
+		var err error
+		messages, err = mail.CollectMessages(scope, q.Limit, q.Days, func(folder string) ([]mail.Message, error) {
+			if q.Alias != "" {
+				return mc.FindByRecipient(q.Alias, q.Limit, q.Days, folder)
+			}
+			return mc.ListInbox(q.Limit, q.Days, folder)
+		})
+		return err
 	})
-	if poolErr == nil {
-		return InboxResult{
-			AccountID: q.AccountID,
-			Alias:     q.Alias,
-			Count:     len(imapMessages),
-			Messages:  imapMessages,
-			Method:    "imap",
-		}, nil
-	}
-	// IMAP 失败,继续尝试 Web API
-
-	// 回退到 Web API (Cookie 认证,无需 App Password)
-	wmc, err := b.mgr.WebMailClient(q.AccountID)
-	if err != nil {
-		return InboxResult{}, &BackendError{Status: http.StatusBadRequest, Code: "VALIDATION_ERROR", Message: "无可用邮件客户端: 需要 App Password 或 Cookie"}
-	}
-
-	if q.Alias != "" {
-		messages, err := wmc.FindByAlias(q.Alias, q.Limit)
+	method := "imap"
+	if poolErr != nil {
+		wmc, err := b.mgr.WebMailClient(q.AccountID)
 		if err != nil {
-			return InboxResult{}, &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: "读取邮件失败"}
+			return InboxResult{}, &BackendError{Status: http.StatusBadRequest, Code: "VALIDATION_ERROR", Message: "无可用邮件客户端: 需要 App Password 或 Cookie"}
 		}
-		return InboxResult{AccountID: q.AccountID, Alias: q.Alias, Count: len(messages), Messages: messages, Method: "web_api"}, nil
+		messages, err = mail.CollectMessages(scope, q.Limit, q.Days, func(folder string) ([]mail.Message, error) {
+			if q.Alias != "" {
+				return wmc.FindByAlias(q.Alias, q.Limit, folder)
+			}
+			return wmc.ListInbox(q.Limit, folder)
+		})
+		if err != nil {
+			return InboxResult{}, &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: "读取邮件失败，请尝试单独查询收件箱或垃圾邮件"}
+		}
+		method = "web_api"
 	}
-	messages, err := wmc.ListInbox(q.Limit)
-	if err != nil {
-		return InboxResult{}, &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: "读取邮件失败"}
-	}
-	return InboxResult{AccountID: q.AccountID, Count: len(messages), Messages: messages, Method: "web_api"}, nil
+	return InboxResult{AccountID: q.AccountID, Alias: q.Alias, Folder: scope, Count: len(messages), Messages: messages, Method: method}, nil
 }
 
-func (b *managerBackend) GetMessage(accountID string, uid uint32) (*mail.FullMessage, error) {
+func (b *managerBackend) GetMessage(accountID string, uid uint32, folder string) (*mail.FullMessage, error) {
 	mc, err := b.mgr.MailClient(accountID)
 	if err != nil {
 		return nil, mapAccountErr(err)
@@ -312,14 +310,15 @@ func (b *managerBackend) GetMessage(accountID string, uid uint32) (*mail.FullMes
 		return nil, &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: "读取邮件失败"}
 	}
 	defer mc.Disconnect()
-	message, err := mc.GetFull(uid)
+	message, err := mc.GetFull(uid, folder)
 	if err != nil {
 		return nil, &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: "读取邮件详情失败"}
 	}
+	message.Folder = folder
 	return message, nil
 }
 
-func (b *managerBackend) DeleteMessage(accountID string, uid uint32) error {
+func (b *managerBackend) DeleteMessage(accountID string, uid uint32, folder string) error {
 	mc, err := b.mgr.MailClient(accountID)
 	if err != nil {
 		return mapAccountErr(err)
@@ -328,7 +327,7 @@ func (b *managerBackend) DeleteMessage(accountID string, uid uint32) error {
 		return &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: "删除邮件失败"}
 	}
 	defer mc.Disconnect()
-	if err := mc.Delete(uid); err != nil {
+	if err := mc.Delete(uid, folder); err != nil {
 		return &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: "删除邮件失败"}
 	}
 	return nil

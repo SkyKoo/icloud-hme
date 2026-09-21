@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -87,5 +88,33 @@ func TestWebMailParamsEncodeValuesAndPreserveURL(t *testing.T) {
 	}
 	if strings.ContainsAny(u.RawQuery, `" `) {
 		t.Fatalf("unsafe raw query: %q", u.RawQuery)
+	}
+}
+
+func TestWebMailJunkUsesFolderAndRejectsInvalidScope(t *testing.T) {
+	c := NewWebClient(map[string]string{"session": "test"}, "12345", "icloud.com")
+	c.mccGatewayURL = "https://p42-mccgateway.icloud.com"
+	calls := 0
+	c.httpc = &webMailTestClient{HttpClient: c.httpc, client: &http.Client{Jar: c.httpc.GetCookieJar(), Transport: webMailTestTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		var payload struct {
+			SessionHeaders struct {
+				Folder string `json:"folder"`
+			} `json:"sessionHeaders"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			return nil, err
+		}
+		if payload.SessionHeaders.Folder != "Junk" {
+			return nil, fmt.Errorf("wrong folder: %q", payload.SessionHeaders.Folder)
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"threadList":[{"threadId":"1","subject":"junk message"}]}`)), Request: r}, nil
+	})}}
+	messages, err := c.ListInbox(20, FolderJunk)
+	if err != nil || len(messages) != 1 {
+		t.Fatalf("junk read failed: %#v %v", messages, err)
+	}
+	if _, err := c.ListInbox(20, "Trash"); err == nil || calls != 1 {
+		t.Fatal("invalid folder reached upstream")
 	}
 }

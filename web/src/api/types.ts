@@ -45,8 +45,12 @@ export interface Alias {
   createdAt?: string
 }
 
+export type MailFolder = 'inbox' | 'junk'
+export type MailFolderScope = MailFolder | 'all'
+
 /** 邮件摘要 */
 export interface InboxMessage {
+  folder?: MailFolder
   id: string
   from: string
   to: string
@@ -62,6 +66,7 @@ export interface FullMessage extends InboxMessage {
 
 /** 收件箱查询结果 */
 export interface InboxResult {
+  folder?: MailFolderScope
   account_id: string
   alias?: string
   count: number

@@ -22,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"icloud-hme/internal/account"
 	"icloud-hme/internal/auth"
+	"icloud-hme/internal/mail"
 	"icloud-hme/internal/webui"
 )
 
@@ -215,9 +216,9 @@ func (s *Server) createAliasHandler(c *gin.Context) {
 
 // ====================================================================
 // 核心接口 2: 读取邮件
-//   GET /api/inbox?account_id=acc_xxx[&alias=xxx@icloud.com][&limit=20][&days=7]
+//   GET /api/inbox?account_id=acc_xxx[&alias=xxx@icloud.com][&folder=all][&limit=20][&days=7]
 //
-//   - 不传 alias: 返回该账号收件箱最近邮件
+//   - 不传 alias: 返回所选范围最近邮件（默认收件箱＋垃圾邮件）
 //   - 传 alias:   只返回发给该 HME 别名的邮件
 //
 //   认证优先级: IMAP (App Password) 优先 > Web API (Cookie) 回退
@@ -241,7 +242,13 @@ func (s *Server) listInboxHandler(c *gin.Context) {
 		return
 	}
 
+	folder := c.DefaultQuery("folder", mail.FolderAll)
+	if !mail.ValidFolder(folder, true) {
+		failCode(c, http.StatusBadRequest, "VALIDATION_ERROR", "参数错误: folder 需为 inbox、junk 或 all")
+		return
+	}
 	result, err := s.be.ListInbox(InboxQuery{
+		Folder:    folder,
 		AccountID: accountID,
 		Alias:     alias,
 		Limit:     limit,
@@ -255,13 +262,19 @@ func (s *Server) listInboxHandler(c *gin.Context) {
 }
 
 func (s *Server) getMessageHandler(c *gin.Context) {
+	folder := c.DefaultQuery("folder", mail.FolderInbox)
+	if !mail.ValidFolder(folder, false) {
+		failCode(c, http.StatusBadRequest, "VALIDATION_ERROR", "参数错误: 邮件文件夹需为 inbox 或 junk")
+		return
+	}
+
 	accountID := c.Query("account_id")
 	uid, err := strconv.ParseUint(c.Param("message_id"), 10, 32)
 	if accountID == "" || err != nil {
 		failCode(c, http.StatusBadRequest, "VALIDATION_ERROR", "account_id 或邮件 ID 无效")
 		return
 	}
-	message, err := s.be.GetMessage(accountID, uint32(uid))
+	message, err := s.be.GetMessage(accountID, uint32(uid), folder)
 	if err != nil {
 		backendFail(c, err)
 		return
@@ -270,13 +283,19 @@ func (s *Server) getMessageHandler(c *gin.Context) {
 }
 
 func (s *Server) deleteMessageHandler(c *gin.Context) {
+	folder := c.DefaultQuery("folder", mail.FolderInbox)
+	if !mail.ValidFolder(folder, false) {
+		failCode(c, http.StatusBadRequest, "VALIDATION_ERROR", "参数错误: 邮件文件夹需为 inbox 或 junk")
+		return
+	}
+
 	accountID := c.Query("account_id")
 	uid, err := strconv.ParseUint(c.Param("message_id"), 10, 32)
 	if accountID == "" || err != nil {
 		failCode(c, http.StatusBadRequest, "VALIDATION_ERROR", "account_id 或邮件 ID 无效")
 		return
 	}
-	if err := s.be.DeleteMessage(accountID, uint32(uid)); err != nil {
+	if err := s.be.DeleteMessage(accountID, uint32(uid), folder); err != nil {
 		backendFail(c, err)
 		return
 	}

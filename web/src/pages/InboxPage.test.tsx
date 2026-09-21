@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -271,4 +271,82 @@ describe('InboxPage', () => {
     renderPage()
     expect(await screen.findByText('—')).toBeInTheDocument()
   })
+  it('默认合并查询，显示同编号邮件的不同来源，并支持切换垃圾邮件', async () => {
+    const urls: string[] = []
+    const messages = [
+      { ...inboxResult.messages[0], folder: 'inbox', subject: '普通邮件' },
+      { ...inboxResult.messages[0], folder: 'junk', subject: '误判邮件' },
+    ]
+    server.use(
+      http.get('/api/accounts', () => HttpResponse.json({ success: true, data: accounts })),
+      http.get('/api/inbox', ({ request }) => {
+        urls.push(request.url)
+        const folder = new URL(request.url).searchParams.get('folder')
+        const selected = folder === 'all' ? messages : messages.filter((m) => m.folder === folder)
+        return HttpResponse.json({ success: true, data: { ...inboxResult, method: 'web_api', messages: selected, count: selected.length } })
+      }),
+    )
+    renderPage()
+    await screen.findByText('误判邮件')
+    expect(screen.getByLabelText('邮件范围')).toHaveValue('all')
+    expect(new URL(urls[0]).searchParams.get('folder')).toBe('all')
+    const rows = screen.getAllByRole('row')
+    expect(rows).toHaveLength(3)
+    expect(within(rows[1]).getByText('收件箱')).toBeInTheDocument()
+    expect(within(rows[2]).getByText('垃圾邮件')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '删除邮件' })).toBeNull()
+    await userEvent.setup().selectOptions(screen.getByLabelText('邮件范围'), 'junk')
+    await screen.findByText('误判邮件')
+    expect(screen.queryByText('普通邮件')).toBeNull()
+    expect(new URL(urls[urls.length - 1]).searchParams.get('folder')).toBe('junk')
+  })
+
+  it('从 URL 恢复垃圾邮件范围及时间和条数', async () => {
+    let lastUrl = ''
+    server.use(
+      http.get('/api/accounts', () => HttpResponse.json({ success: true, data: accounts })),
+      http.get('/api/inbox', ({ request }) => {
+        lastUrl = request.url
+        return HttpResponse.json({ success: true, data: inboxResult })
+      }),
+    )
+    renderPage('/inbox?account_id=acc_1&folder=junk&limit=100&days=30')
+    await screen.findByText('主题一')
+    expect(screen.getByLabelText('邮件范围')).toHaveValue('junk')
+    expect(screen.getByLabelText('每页')).toHaveValue('100')
+    expect(screen.getByLabelText('时间范围')).toHaveValue('30')
+    const query = new URL(lastUrl).searchParams
+    expect(query.get('folder')).toBe('junk')
+    expect(query.get('days')).toBe('30')
+    expect(query.get('limit')).toBe('100')
+  })
+
+  it('IMAP 详情和删除携带该邮件来源，不误用当前合并范围', async () => {
+    let detailUrl = ''
+    let deleteUrl = ''
+    const message = { ...inboxResult.messages[0], folder: 'junk', subject: '垃圾箱中的正常邮件' }
+    server.use(
+      http.get('/api/accounts', () => HttpResponse.json({ success: true, data: accounts })),
+      http.get('/api/inbox', () => HttpResponse.json({ success: true, data: { ...inboxResult, messages: [message] } })),
+      http.get('/api/inbox/1', ({ request }) => {
+        detailUrl = request.url
+        return HttpResponse.json({ success: true, data: { ...message, body: '正文内容', content_type: 'text/plain' } })
+      }),
+      http.delete('/api/inbox/1', ({ request }) => {
+        deleteUrl = request.url
+        return HttpResponse.json({ success: true, data: { id: '1' } })
+      }),
+    )
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: '垃圾箱中的正常邮件' }))
+    await screen.findByText('正文内容')
+    expect(new URL(detailUrl).searchParams.get('folder')).toBe('junk')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '删除邮件' }))
+    expect(screen.getByText('邮件将从垃圾邮件中永久删除。')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '确认删除' }))
+    await waitFor(() => expect(deleteUrl).not.toBe(''))
+    expect(new URL(deleteUrl).searchParams.get('folder')).toBe('junk')
+  })
+
 })

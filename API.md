@@ -248,13 +248,14 @@ X-CSRF-Token: <token>
 ### 13. 读取邮件
 
 ```http
-GET /api/inbox?account_id=acc_1&alias=xyz123@icloud.com&limit=20&days=7
+GET /api/inbox?account_id=acc_1&folder=all&alias=xyz123@icloud.com&limit=20&days=7
 ```
 
 - `account_id` 必填
 - `alias` 可选，只返回发给该别名的邮件
-- `limit` 1–100（默认 20）
-- `days` 1–90（默认 7）；非法整数直接 `400 VALIDATION_ERROR`
+- `folder` 为 `all`（默认，收件箱＋垃圾邮件）、`inbox` 或 `junk`；其他值返回 `400 VALIDATION_ERROR`
+- `limit` 1–100（默认 20），应用于合并后的总条数
+- `days` 1–90（默认 7），IMAP 和 Web API 均按邮件时间过滤；非法整数直接 `400 VALIDATION_ERROR`
 
 **响应（IMAP 优先，Web API 回退）：**
 
@@ -264,11 +265,13 @@ GET /api/inbox?account_id=acc_1&alias=xyz123@icloud.com&limit=20&days=7
   "data": {
     "account_id": "acc_1",
     "alias": "xyz123@icloud.com",
-    "count": 2,
+    "folder": "all",
+    "count": 1,
     "method": "imap",
     "messages": [
       {
         "id": "1042",
+        "folder": "junk",
         "from": "GitHub <noreply@github.com>",
         "to": "xyz123@icloud.com",
         "subject": "[GitHub] Please verify your email address",
@@ -281,6 +284,17 @@ GET /api/inbox?account_id=acc_1&alias=xyz123@icloud.com&limit=20&days=7
 ```
 
 `method` 为 `imap` 或 `web_api`。IMAP 路径支持服务端按收件人搜索；Web API 路径拉取后本地过滤。
+
+响应的 `data.folder` 表示所选范围，`messages[].folder` 为该邮件的 `inbox` 或 `junk` 来源。
+合并时按邮件时间倒序，保留不同文件夹内相同编号的邮件；查询不会移动邮件或修改垃圾分类。
+任一文件夹读取失败时返回错误，不将部分结果当成完整结果。Web API 摘要可能缺少收件人，
+按别名过滤可能漏信，可不传 `alias` 或使用 IMAP。
+
+IMAP 邮件详情 `GET /api/inbox/:message_id` 和删除 `DELETE /api/inbox/:message_id`
+均接受 `account_id` 与 `folder=inbox|junk`（详情/删除不传时保持默认 `inbox`）。
+必须使用该邮件返回的来源和 IMAP UID，不能使用合并范围 `all`；Web API thread ID
+不是 IMAP UID，不支持这两个操作。删除仍要求管理员会话和 CSRF。
+
 
 ### 14. 列出别名
 

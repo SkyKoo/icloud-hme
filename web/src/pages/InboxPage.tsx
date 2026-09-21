@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { request, ApiError } from '../api/client'
-import type { AccountSummary, Alias, FullMessage, InboxResult, InboxMessage } from '../api/types'
+import type { AccountSummary, Alias, FullMessage, InboxResult, InboxMessage, MailFolderScope } from '../api/types'
 import AsyncState from '../components/AsyncState'
 import Dialog from '../components/Dialog'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -20,7 +20,13 @@ function formatDate(raw: string): string {
   }).format(d)
 }
 
+function folderScope(value: string | null): MailFolderScope {
+  return value === 'inbox' || value === 'junk' ? value : 'all'
+}
+
 export default function InboxPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [folder, setFolder] = useState<MailFolderScope>(() => folderScope(searchParams.get('folder')))
   const [accounts, setAccounts] = useState<AccountSummary[]>([])
   const [aliases, setAliases] = useState<Alias[]>([])
   const [accountId, setAccountId] = useState('')
@@ -37,14 +43,13 @@ export default function InboxPage() {
   const [deleteFor, setDeleteFor] = useState<InboxMessage | null>(null)
   const [deleting, setDeleting] = useState(false)
 
-  const [searchParams, setSearchParams] = useSearchParams()
   const abortRef = useRef<AbortController | null>(null)
   const { show } = useToast()
 
   async function openMessage(message: InboxMessage) {
     setDetailLoading(true)
     try {
-      const data = await request<FullMessage>(`/api/inbox/${encodeURIComponent(message.id)}?account_id=${encodeURIComponent(accountId)}`)
+      const data = await request<FullMessage>(`/api/inbox/${encodeURIComponent(message.id)}?account_id=${encodeURIComponent(accountId)}&folder=${message.folder ?? 'inbox'}`)
       setDetail(data)
     } catch (err) {
       show(err instanceof ApiError ? err.message : '读取邮件详情失败')
@@ -57,7 +62,7 @@ export default function InboxPage() {
     if (!deleteFor) return
     setDeleting(true)
     try {
-      await request(`/api/inbox/${encodeURIComponent(deleteFor.id)}?account_id=${encodeURIComponent(accountId)}`, { method: 'DELETE' })
+      await request(`/api/inbox/${encodeURIComponent(deleteFor.id)}?account_id=${encodeURIComponent(accountId)}&folder=${deleteFor.folder ?? 'inbox'}`, { method: 'DELETE' })
       setDeleteFor(null)
       setDetail(null)
       show('邮件已删除')
@@ -69,7 +74,7 @@ export default function InboxPage() {
     }
   }
 
-  // 加载账号列表并初始化筛选状态(只保存 account_id/alias/limit/days)
+  // 加载账号列表并初始化筛选状态。
   useEffect(() => {
     let cancelled = false
     request<AccountSummary[]>('/api/accounts')
@@ -81,16 +86,16 @@ export default function InboxPage() {
         const target = valid ? valid.id : data[0]?.id ?? ''
         setAccountId(target)
         if (target) {
-          const next: Record<string, string> = { account_id: target }
+          const next: Record<string, string> = { account_id: target, folder }
           const qAlias = searchParams.get('alias')
           if (qAlias) {
             setAlias(qAlias)
             next.alias = qAlias
           }
           const qLimit = searchParams.get('limit')
-          if (qLimit) next.limit = qLimit
+          if (qLimit && ['1', '20', '100'].includes(qLimit)) { setLimit(Number(qLimit)); next.limit = qLimit }
           const qDays = searchParams.get('days')
-          if (qDays) next.days = qDays
+          if (qDays && ['1', '7', '30', '90'].includes(qDays)) { setDays(Number(qDays)); next.days = qDays }
           setSearchParams(next, { replace: true })
         }
       })
@@ -134,7 +139,7 @@ export default function InboxPage() {
     const controller = new AbortController()
     abortRef.current = controller
     let cancelled = false
-    const params = new URLSearchParams({ account_id: accountId })
+    const params = new URLSearchParams({ account_id: accountId, folder })
     if (alias) params.set('alias', alias)
     params.set('limit', String(limit))
     params.set('days', String(days))
@@ -158,12 +163,12 @@ export default function InboxPage() {
       cancelled = true
       controller.abort()
     }
-  }, [accountId, alias, limit, days, retryKey])
+  }, [accountId, alias, folder, limit, days, retryKey])
 
   const qAlias = useMemo(() => alias, [alias])
 
   function handleSearch() {
-    const next: Record<string, string> = { account_id: accountId }
+    const next: Record<string, string> = { account_id: accountId, folder }
     if (qAlias) next.alias = qAlias
     next.limit = String(limit)
     next.days = String(days)
@@ -175,7 +180,18 @@ export default function InboxPage() {
     setAccountId(id)
     setAlias('')
     setResult(null)
-    setSearchParams({ account_id: id }, { replace: true })
+    setSearchParams({ account_id: id, folder, limit: String(limit), days: String(days) }, { replace: true })
+  }
+
+  function handleFolderChange(value: string) {
+    const nextFolder = folderScope(value)
+    setFolder(nextFolder)
+    setResult(null)
+    setError('')
+    setLoading(true)
+    const next = new URLSearchParams(searchParams)
+    next.set('folder', nextFolder)
+    setSearchParams(next, { replace: true })
   }
 
   const methodText = result?.method === 'imap' ? 'IMAP' : 'Web API'
@@ -184,8 +200,8 @@ export default function InboxPage() {
     <section>
       <div className="page-header">
         <div className="page-title">
-          <h2>收件箱摘要</h2>
-          <p>查看发往隐私别名的邮件（仅显示纯文本摘要）</p>
+          <h2>邮件摘要</h2>
+          <p>查看收件箱和垃圾邮件中的纯文本摘要，保留邮件原有分类</p>
         </div>
       </div>
 
@@ -203,6 +219,14 @@ export default function InboxPage() {
                   {a.name}
                 </option>
               ))}
+            </select>
+          </div>
+          <div className="form-field" style={{ marginBottom: 0 }}>
+            <label htmlFor="inbox-folder">邮件范围</label>
+            <select id="inbox-folder" value={folder} disabled={!accountId} onChange={(e) => handleFolderChange(e.target.value)}>
+              <option value="all">收件箱＋垃圾邮件</option>
+              <option value="inbox">收件箱</option>
+              <option value="junk">垃圾邮件</option>
             </select>
           </div>
           <div className="form-field" style={{ marginBottom: 0 }}>
@@ -253,6 +277,7 @@ export default function InboxPage() {
         </div>
       </div>
 
+      {result?.method === 'web_api' && alias && <p className="hint">按别名筛选可能遗漏收件人信息不完整的邮件；找不到时，请将“别名”切换为“全部”。</p>}
       <AsyncState
         loading={loading}
         error={error}
@@ -276,6 +301,7 @@ export default function InboxPage() {
               <table>
                 <thead>
                   <tr>
+                    <th>来源</th>
                     <th>主题</th>
                     <th>发件人</th>
                     <th>收件人</th>
@@ -285,12 +311,13 @@ export default function InboxPage() {
                 </thead>
                 <tbody>
                   {result.messages.map((m) => (
-                    <tr key={m.id}>
-                      <td><button className="link-button" onClick={() => void openMessage(m)}>{m.subject || '（无主题）'}</button></td>
+                    <tr key={`${m.folder ?? 'inbox'}:${m.id}`}>
+                      <td><span className={m.folder === 'junk' ? 'badge badge-pending' : 'badge badge-neutral'}>{m.folder === 'junk' ? '垃圾邮件' : '收件箱'}</span></td>
+                      <td>{result.method === 'imap' ? <button className="link-button" onClick={() => void openMessage(m)}>{m.subject || '（无主题）'}</button> : (m.subject || '（无主题）')}</td>
                       <td>{m.from}</td>
                       <td>{m.to}</td>
                       <td>{formatDate(m.date)}</td>
-                      <td>{m.preview || '—'} <button className="icon-button danger" aria-label="删除邮件" title="删除邮件" onClick={() => setDeleteFor(m)}><IconTrash size={14} /></button></td>
+                      <td>{m.preview || '—'} {result.method === 'imap' && <button className="icon-button danger" aria-label="删除邮件" title="删除邮件" onClick={() => setDeleteFor(m)}><IconTrash size={14} /></button>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -309,7 +336,7 @@ export default function InboxPage() {
           <div className="form-actions"><button className="danger" onClick={() => setDeleteFor(detail)}>删除邮件</button><button onClick={() => setDetail(null)}>关闭</button></div>
         </>}
       </Dialog>
-      {deleteFor && <ConfirmDialog title="删除邮件" message="邮件将从收件箱中永久删除。" open busy={deleting} onClose={() => setDeleteFor(null)} onConfirm={() => void deleteMessage()} />}
+      {deleteFor && <ConfirmDialog title="删除邮件" message={`邮件将从${deleteFor.folder === 'junk' ? '垃圾邮件' : '收件箱'}中永久删除。`} open busy={deleting} onClose={() => setDeleteFor(null)} onConfirm={() => void deleteMessage()} />}
     </section>
   )
 }

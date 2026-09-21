@@ -27,6 +27,7 @@ const (
 // Message 是一封邮件的摘要信息。
 type Message struct {
 	ID      string `json:"id"`
+	Folder  string `json:"folder,omitempty"`
 	From    string `json:"from"`
 	To      string `json:"to"`
 	Subject string `json:"subject"`
@@ -121,7 +122,7 @@ func (c *Client) InboxCount() (int, error) {
 //
 // days 用于过滤只看近 N 天的邮件(0 表示不限制)。
 // 返回按时间倒序排列。
-func (c *Client) ListInbox(limit int, days int) ([]Message, error) {
+func (c *Client) ListInbox(limit int, days int, folders ...string) ([]Message, error) {
 	if c.cli == nil {
 		return nil, fmt.Errorf("未连接")
 	}
@@ -129,7 +130,7 @@ func (c *Client) ListInbox(limit int, days int) ([]Message, error) {
 		limit = 50
 	}
 
-	mbox, err := c.cli.Select("INBOX", true)
+	mbox, err := c.selectMailbox(true, folders...)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +168,7 @@ func (c *Client) ListInbox(limit int, days int) ([]Message, error) {
 		m := toMessageWithBody(msg)
 		// days 过滤
 		if days > 0 {
-			if t, err := time.Parse(time.RFC1123Z, m.Date); err == nil {
+			if t := messageDate(m.Date); !t.IsZero() {
 				if time.Since(t) > time.Duration(days)*24*time.Hour {
 					continue
 				}
@@ -184,19 +185,19 @@ func (c *Client) ListInbox(limit int, days int) ([]Message, error) {
 
 // FindByRecipient 查找发给指定隐私邮箱别名的最近 limit 封邮件(新→旧)。
 //
-// 先尝试 IMAP TO 搜索; 失败则只扫收件箱最近若干封本地过滤。
-func (c *Client) FindByRecipient(recipient string, limit int, days int) ([]Message, error) {
+// 先尝试 IMAP TO 搜索; 失败则只扫指定文件夹最近若干封本地过滤。
+func (c *Client) FindByRecipient(recipient string, limit int, days int, folders ...string) ([]Message, error) {
 	var out []Message
 	err := c.ForEachByRecipient(recipient, limit, days, func(m Message) bool {
 		out = append(out, m)
 		return true // 收满 limit 为止
-	})
+	}, folders...)
 	return out, err
 }
 
 // ForEachByRecipient 按新→旧遍历发给 recipient 的最近 limit 封邮件。
 // onMsg 返回 false 时立即停止(用于 OTP 命中即返回)。
-func (c *Client) ForEachByRecipient(recipient string, limit int, days int, onMsg func(Message) bool) error {
+func (c *Client) ForEachByRecipient(recipient string, limit int, days int, onMsg func(Message) bool, folders ...string) error {
 	if c.cli == nil {
 		return fmt.Errorf("未连接")
 	}
@@ -207,7 +208,7 @@ func (c *Client) ForEachByRecipient(recipient string, limit int, days int, onMsg
 		limit = 5
 	}
 
-	if _, err := c.cli.Select("INBOX", true); err != nil {
+	if _, err := c.selectMailbox(true, folders...); err != nil {
 		return err
 	}
 
@@ -234,7 +235,7 @@ func (c *Client) ForEachByRecipient(recipient string, limit int, days int, onMsg
 	}
 
 	// 2) fallback: 只扫最近 N 封信封, 命中 To 再拉 body
-	return c.forEachRecentMatching(recipient, limit, days, onMsg)
+	return c.forEachRecentMatching(recipient, limit, days, onMsg, folders...)
 }
 
 // newestUIDs 保留 UID 列表中最新的 limit 个(假定 UID 升序)。
@@ -245,9 +246,9 @@ func newestUIDs(uids []uint32, limit int) []uint32 {
 	return uids[len(uids)-limit:]
 }
 
-// forEachRecentMatching 拉取收件箱最近 scan 封(仅 envelope), 本地按 To 过滤后再取 body。
-func (c *Client) forEachRecentMatching(recipient string, limit int, days int, onMsg func(Message) bool) error {
-	mbox, err := c.cli.Select("INBOX", true)
+// forEachRecentMatching 拉取指定文件夹最近 scan 封(仅 envelope), 本地按 To 过滤后再取 body。
+func (c *Client) forEachRecentMatching(recipient string, limit int, days int, onMsg func(Message) bool, folders ...string) error {
+	mbox, err := c.selectMailbox(true, folders...)
 	if err != nil {
 		return err
 	}
@@ -374,11 +375,11 @@ func (c *Client) fetchByUIDs(uids []uint32, limit int) ([]Message, error) {
 }
 
 // GetFull 获取单封邮件的完整内容(含正文)。
-func (c *Client) GetFull(uid uint32) (*FullMessage, error) {
+func (c *Client) GetFull(uid uint32, folders ...string) (*FullMessage, error) {
 	if c.cli == nil {
 		return nil, fmt.Errorf("未连接")
 	}
-	if _, err := c.cli.Select("INBOX", true); err != nil {
+	if _, err := c.selectMailbox(true, folders...); err != nil {
 		return nil, err
 	}
 
@@ -412,15 +413,15 @@ func (c *Client) GetFull(uid uint32) (*FullMessage, error) {
 	return full, nil
 }
 
-// Delete 删除收件箱中指定 UID 的邮件。
-func (c *Client) Delete(uid uint32) error {
+// Delete 删除指定文件夹中指定 UID 的邮件，省略文件夹时使用收件箱。
+func (c *Client) Delete(uid uint32, folders ...string) error {
 	if c.cli == nil {
 		return fmt.Errorf("未连接")
 	}
 	if uid == 0 {
 		return fmt.Errorf("邮件 UID 无效")
 	}
-	if _, err := c.cli.Select("INBOX", false); err != nil {
+	if _, err := c.selectMailbox(false, folders...); err != nil {
 		return err
 	}
 
