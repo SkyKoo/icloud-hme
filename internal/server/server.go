@@ -31,6 +31,7 @@ type Config struct {
 	AdminPassword string
 	SessionTTL    time.Duration
 	SecureCookie  bool
+	BasePath      string
 }
 
 // Server 封装 Gin 引擎、账号后端与认证。
@@ -44,6 +45,11 @@ type Server struct {
 
 // New 创建 Server。mgr 为账号管理器,cfg 为安全配置。
 func New(mgr *account.Manager, cfg Config) (*Server, error) {
+	basePath, err := normalizeBasePath(cfg.BasePath)
+	if err != nil {
+		return nil, err
+	}
+	cfg.BasePath = basePath
 	if _, err := auth.NewManager(auth.Options{
 		Password: cfg.AdminPassword,
 		TTL:      cfg.SessionTTL,
@@ -77,11 +83,32 @@ func newWithBackend(be Backend, cfg Config) *Server {
 
 // Run 启动 HTTP 服务。
 func (s *Server) Run(addr string) error {
-	return s.r.Run(addr)
+	return http.ListenAndServe(addr, s.Handler())
 }
 
-// Handler 返回底层 gin 引擎(便于测试)。
-func (s *Server) Handler() http.Handler { return s.r }
+// Handler 将管理界面与 API 一起挂载到配置路径。
+func (s *Server) Handler() http.Handler {
+	if s.cfg.BasePath == "" {
+		return s.r
+	}
+	prefix := s.cfg.BasePath
+	mounted := http.StripPrefix(prefix, s.r)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == prefix {
+			target := prefix + "/"
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusPermanentRedirect)
+			return
+		}
+		if !strings.HasPrefix(r.URL.Path, prefix+"/") {
+			http.NotFound(w, r)
+			return
+		}
+		mounted.ServeHTTP(w, r)
+	})
+}
 
 func (s *Server) register() {
 	api := s.r.Group("/api")
@@ -137,7 +164,7 @@ func (s *Server) register() {
 			c.String(http.StatusMethodNotAllowed, "方法不允许")
 			return
 		}
-		webui.Handler(webuiFS).ServeHTTP(c.Writer, c.Request)
+		webui.HandlerWithBasePath(webuiFS, s.cfg.BasePath).ServeHTTP(c.Writer, c.Request)
 	})
 }
 

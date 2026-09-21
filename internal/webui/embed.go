@@ -80,6 +80,12 @@ func hashedAsset(name string) bool {
 // 不存在且路径不含文件扩展名时返回 index.html;生产 dist 未生成时返回
 // 清晰的 503 中文纯文本,而不是 panic。
 func Handler(fsys fs.FS) http.Handler {
+	return HandlerWithBasePath(fsys, "")
+}
+
+// HandlerWithBasePath 为构建产物补齐运行时路径;API、路由和资源使用同一前缀。
+// basePath 必须由调用方规范化并验证,根路径用空字符串表示。
+func HandlerWithBasePath(fsys fs.FS, basePath string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -113,7 +119,11 @@ func Handler(fsys fs.FS) http.Handler {
 				if r.Method == http.MethodHead {
 					return
 				}
-				_, _ = io.Copy(w, file)
+				if name == "index.html" {
+					writeIndex(w, file, basePath)
+				} else {
+					_, _ = io.Copy(w, file)
+				}
 				return
 			}
 			// 目录:落到 SPA fallback
@@ -142,6 +152,21 @@ func Handler(fsys fs.FS) http.Handler {
 		if r.Method == http.MethodHead {
 			return
 		}
-		_, _ = io.Copy(w, index)
+		writeIndex(w, index, basePath)
 	})
+}
+
+// writeIndex 只改写入口 HTML 中的资源链接,不使用内联脚本或放宽 CSP。
+func writeIndex(w io.Writer, index io.Reader, basePath string) {
+	data, err := io.ReadAll(index)
+	if err != nil {
+		return
+	}
+	prefix := basePath + "/"
+	replacer := strings.NewReplacer(
+		`name="hme-base-path" content="/"`, `name="hme-base-path" content="`+prefix+`"`,
+		`src="./`, `src="`+prefix,
+		`href="./`, `href="`+prefix,
+	)
+	_, _ = io.WriteString(w, replacer.Replace(string(data)))
 }

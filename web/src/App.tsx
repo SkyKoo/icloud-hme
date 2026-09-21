@@ -1,4 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { basePath } from './basePath'
 import { AuthProvider, useAuth } from './auth/AuthProvider'
 import { ToastProvider } from './components/ToastProvider'
 import AppShell from './components/AppShell'
@@ -20,7 +21,7 @@ function ProtectedLayout() {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={basePath()}>
       <AuthProvider>
         <ToastProvider>
           <Routes>

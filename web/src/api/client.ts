@@ -1,3 +1,4 @@
+import { basePath } from '../basePath'
 import type { ApiResponse } from './types'
 
 /** CSRF token,仅存 React 内存状态 */
@@ -60,7 +61,7 @@ export async function request<T>(
 
   let resp: Response
   try {
-    resp = await fetch(path, {
+    resp = await fetch(basePath() + path.replace(/^\//, ''), {
       ...init,
       method,
       headers,

@@ -4,6 +4,8 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  // 静态资源使用相对路径,由 Go 在运行时补齐部署前缀。
+  base: './',
   build: {
     outDir: '../internal/webui/dist',
     emptyOutDir: true,

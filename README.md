@@ -80,6 +80,12 @@ go build -o icloud-hme .
 | `ICLOUD_HME_ADMIN_PASSWORD` | 管理员密码，**必填**，至少 8 字符 | 无（缺失时拒绝启动） |
 | `ICLOUD_HME_SESSION_TTL` | 会话有效期 | `12h`（范围 `15m`–`168h`） |
 | `ICLOUD_HME_SECURE_COOKIE` | 通过 TLS 反向代理部署时设为 `true` | `false` |
+| `ICLOUD_HME_BASE_PATH` | 界面与 API 的部署路径,例如 `/hme` | `/` |
+
+同一镜像或二进制可以在启动时通过 `ICLOUD_HME_BASE_PATH=/hme` 挂载到子路径,
+无需重新构建。此时访问 `/hme/`,API 为 `/hme/api/...`,会话 Cookie 限于 `/hme/`。
+反向代理必须保留 `/hme` 前缀传给应用,不要剥离路径。HTTPS 入口同时设置
+`ICLOUD_HME_SECURE_COOKIE=true`。未设置子路径时,现有根路径访问方式不变。
 
 > **Breaking Change（v0.3+）**：升级后未设置 `ICLOUD_HME_ADMIN_PASSWORD` 将拒绝启动；
 > 原有匿名 API 调用将收到 `401 AUTH_REQUIRED`。管理员会话只存内存，进程重启即失效。

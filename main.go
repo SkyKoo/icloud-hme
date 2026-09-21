@@ -67,6 +67,7 @@ func main() {
 		AdminPassword: adminPassword,
 		SessionTTL:    sessionTTL,
 		SecureCookie:  secureCookie,
+		BasePath:      os.Getenv("ICLOUD_HME_BASE_PATH"),
 	})
 	if err != nil {
 		log.Fatalf("初始化服务失败: %v", err)

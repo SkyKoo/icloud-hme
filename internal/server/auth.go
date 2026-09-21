@@ -43,12 +43,12 @@ func requireSession(mgr *authManager) gin.HandlerFunc {
 	}
 }
 
-// setSessionCookie 设置会话 Cookie(固定属性:Path=/、HttpOnly、SameSite=Strict)。
-func setSessionCookie(c *gin.Context, sessionID string, expiresAt time.Time, secure bool) {
+// setSessionCookie 将会话 Cookie 限制在应用路径,并设置 HttpOnly 与 SameSite=Strict。
+func setSessionCookie(c *gin.Context, sessionID string, expiresAt time.Time, secure bool, cookiePath string) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    sessionID,
-		Path:     "/",
+		Path:     cookiePath,
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
@@ -57,14 +57,15 @@ func setSessionCookie(c *gin.Context, sessionID string, expiresAt time.Time, sec
 }
 
 // clearSessionCookie 清除会话 Cookie。
-func clearSessionCookie(c *gin.Context) {
+func clearSessionCookie(c *gin.Context, secure bool, cookiePath string) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
-		Path:     "/",
+		Path:     cookiePath,
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
+		Secure:   secure,
 	})
 }
 
@@ -92,7 +93,7 @@ func (s *Server) handleLogin(c *gin.Context) {
 		return
 	}
 	s.limiter.Success(ip)
-	setSessionCookie(c, sessionID, sess.ExpiresAt, s.cfg.SecureCookie)
+	setSessionCookie(c, sessionID, sess.ExpiresAt, s.cfg.SecureCookie, s.cfg.BasePath+"/")
 	ok(c, gin.H{
 		"csrf_token": sess.CSRFToken,
 		"expires_at": sess.ExpiresAt.Format(time.RFC3339),
@@ -132,6 +133,6 @@ func (s *Server) handleLogout(c *gin.Context) {
 	if sessionID != "" {
 		s.auth.Logout(sessionID)
 	}
-	clearSessionCookie(c)
+	clearSessionCookie(c, s.cfg.SecureCookie, s.cfg.BasePath+"/")
 	ok(c, gin.H{"logged_out": true})
 }
