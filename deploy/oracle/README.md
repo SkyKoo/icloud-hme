@@ -1,149 +1,140 @@
-# Mac 开发、GHCR 发布与 O 机器部署
+# Mac 开发、O 机器构建与部署
 
-配置核对日期：2026-09-21。本目录是 O 机器（`oracle-a1`，Linux ARM64）的部署模板；
-模板提交到 GitHub、工作流运行成功后才会发布镜像，文件本身不会触发服务器部署。
+配置核对日期：2026-09-21。默认流程为 Mac 修改并测试、推送自己的 fork，再在
+O 机器（`oracle-a1`，Linux ARM64）拉取源码、构建镜像、更新容器。
+不需要等待 GitHub 镜像发布，也不需要在服务器配置 GHCR 登录。
 
-## 开发与发布
+## 日常使用
 
-Mac 本地仓库使用 `origin` 管理自己的 fork，使用 `upstream` 跟踪原作者。
-当前约定如下；新克隆尚未设置 upstream 时再执行添加命令：
+在 Mac 完成修改和测试后，提交并 `git push origin main`。然后在 Mac 执行一条命令：
 
 ```bash
-git remote add upstream https://github.com/xiaozhou26/icloud-hme.git
-git fetch --no-tags upstream
-git remote -v
+ssh oracle-a1 'cd ~/projects/icloud-hme && ./deploy/oracle/deploy.sh'
 ```
 
-`fetch` 只更新远端跟踪分支；合并上游改动应在 Mac 的开发分支完成，先测试再推送到
-`origin`。O 机器不负责合并源码。上游引用见
-[xiaozhou26/icloud-hme](https://github.com/xiaozhou26/icloud-hme)。
+也可以登录 O 机器，在仓库根目录运行 `./deploy/oracle/deploy.sh`。脚本会：
 
-| 触发方式 | 执行顺序与产物 |
-| --- | --- |
-| Pull request | `ci.yml`：前端 lint、测试、构建；Go race 测试、vet、构建；Compose 配置校验 |
-| 推送 main / 手动运行 Docker Image | 调用同一提交的 `ci.yml`，全部成功后构建 amd64 + arm64 镜像，发布 `sha-<提交前12位>`；main 同时更新 `latest` |
-| 推送语义版本标签，例如 v0.3.1 | 调用同一套 CI，成功后构建二进制和双架构镜像；发布 `0.3.1`、`0.3` 等标签并创建 Release |
+1. 检查普通用户、ARM64、main 分支、干净工作树，并取得部署锁。
+2. 用普通用户执行 `git pull --ff-only origin main`；拒绝覆盖本地修改或部署未推送提交。
+3. 用 `git archive` 导出已提交源码，sudo Docker 构建 ARM64 镜像；本机未跟踪文件不会进入构建。
+4. 将镜像命名为 `icloud-hme:sha-<提交前12位>-<构建时间>`，此时旧容器继续运行。
+5. 检查新配置和旧镜像，短暂停止应用并备份一致数据，然后用新镜像重建容器并等待健康检查。
+6. 成功后保存部署记录；若切换失败，恢复旧镜像、配置及升级前数据，脚本以非零状态退出。
 
-CI 不另外监听 main 的 push，避免一次提交重复跑两套测试。
-`latest` 由 main 的镜像工作流维护，版本发布不覆盖它；生产部署选择已验证的具体
-版本或镜像 digest。标签本身可以被覆盖，digest 才能唯一锁定镜像内容。
-推送版本标签时使用尚未存在的版本，并只推送这个标签，不批量推送所有本地标签。
+每次服务器变更前后，仍须按服务器管理仓库要求登记 `OPERATIONS_LOG.md`。
+CI 在 GitHub 后台独立运行，脚本不会等待或绕过其状态；部署前应在 Mac 验证改动，
+例如运行 `./build.sh`，不要把“构建成功”当成所有业务测试通过。
 
-首次使用 fork 时，在 GitHub 的 Actions 页面启用工作流；仓库策略需允许所用的
-Actions。发布任务已经声明 `contents: read`、`packages: write`，使用 GitHub 自带的
-`GITHUB_TOKEN`，不需要把个人 Token 或 O 机器 SSH 私钥写进 Actions Secrets。
-GitHub Release 任务单独获得 `contents: write`。
+构建会占用 O 机器的资源，首次需要下载基础镜像和 npm/Go 依赖；后续可复用 Docker
+层缓存。只构建 ARM64，不上传 GHCR。单容器更新存在短暂中断，不保证零停机或固定耗时。
 
-本 fork 的预期镜像名称为 `ghcr.io/skykoo/icloud-hme`。首次成功发布后，在 GitHub
-Packages 确认包与仓库关联、Actions 的写入权限以及镜像可见性：
+## 首次准备
 
-- 公开镜像可匿名拉取；公开代码仓库不代表镜像自动公开。改为公开前检查镜像内容，
-  GitHub 当前不支持把公开包改回私有。
-- 私有镜像需要有包访问权限、含 `read:packages` 的 PAT classic。
-  在 O 机器运行 `sudo docker login ghcr.io -u <GitHub用户名>` 并在交互提示中输入；
-  不把 Token 放进命令参数、仓库或聊天。后续以同样的 sudo 身份拉取。
+O 机器需要 Git、Bash、Python 3、flock、tar，以及支持 `up --wait` 的 Docker Compose。
+Node.js、Go 工具链都在 Docker 构建阶段使用，无需在宿主机安装。
+`ubuntu` 负责源码操作，Docker 和运行目录管理按需使用已有 sudo 权限。
 
-## O 机器首次部署
-
-以下命令是待执行的部署步骤。执行前按 O 机器管理仓库的规则登记运维计划；
-安装完成后记录镜像 digest、验证结果和回退位置。这里只使用已有 Docker/Compose。
-
-在 Mac 的仓库根目录上传模板：
+已有仓库时，先引入本次新增脚本，然后执行：
 
 ```bash
-ssh oracle-a1 'install -d -m 700 ~/.local/state/icloud-hme-setup'
-scp deploy/oracle/compose.yaml deploy/oracle/.env.example oracle-a1:~/.local/state/icloud-hme-setup/
 ssh oracle-a1
+cd ~/projects/icloud-hme
+git pull --ff-only origin main
+./deploy/oracle/deploy.sh
 ```
 
-在 O 机器准备目录和配置。容器使用 UID/GID `10001:10001`，不需要在宿主机创建
-同名登录用户；仅数据目录交给该 UID，配置和备份仍由 root 管理：
+新服务器才需要先克隆：
 
 ```bash
-sudo install -d -o root -g root -m 755 /opt/icloud-hme
-sudo install -o root -g root -m 644 ~/.local/state/icloud-hme-setup/compose.yaml /opt/icloud-hme/compose.yaml
-sudo test -e /opt/icloud-hme/.env || sudo install -o root -g root -m 600 ~/.local/state/icloud-hme-setup/.env.example /opt/icloud-hme/.env
-sudo install -d -o 10001 -g 10001 -m 700 /opt/icloud-hme/data
-sudo install -d -o root -g root -m 700 /opt/icloud-hme/backups
-sudoedit /opt/icloud-hme/.env
+umask 027
+mkdir -p ~/projects
+git clone https://github.com/SkyKoo/icloud-hme.git ~/projects/icloud-hme
 ```
 
-必须填写：
+公开 HTTPS 仓库无需 GitHub 密钥；不要使用 sudo git。
+首次运行自动初始化以下目录，已有 `.env` 不会被覆盖：
 
-- `ICLOUD_HME_IMAGE`：GHCR 中已存在的具体版本或 digest，例如
-  `ghcr.io/skykoo/icloud-hme@sha256:<实际digest>`。模板不提供 latest 默认值。
-- `ICLOUD_HME_ADMIN_PASSWORD`：独立随机密码，至少 8 字符。
-  含 `$`、`#` 的值用单引号包裹，以免 .env 插值或注释处理改变密码。
+| 路径 | 归属与用途 |
+| --- | --- |
+| `~/projects/icloud-hme` | ubuntu 管理的源码，仅在 Mac 修改代码，在 O 机器拉取 |
+| `/opt/icloud-hme/compose.yaml` | root 管理的当前部署模板，每次发布从源码复制 |
+| `/opt/icloud-hme/.env` | root-only、600，首次生成独立随机管理员密码 |
+| `/opt/icloud-hme/current.json` | root-only，当前提交、镜像与升级前备份位置 |
+| `/opt/icloud-hme/data` | UID/GID 10001:10001、700，业务持久化数据 |
+| `/opt/icloud-hme/backups` | root-only、700，每次切换前的配置和数据备份 |
 
-可选参数见 [.env.example](.env.example)。默认端口为 8081；如与其他服务冲突，修改
-`ICLOUD_HME_BIND_PORT`，SSH 隧道的远端端口也要相应修改。
-HTTP 经 SSH 隧道访问时保持 `ICLOUD_HME_SECURE_COOKIE=false`；
-将来通过 HTTPS 反向代理访问时改为 true，并单独核对 OCI 与主机防火墙规则。
-
-启动及验收：
+镜像引用由部署脚本选择，无需填写 `ICLOUD_HME_IMAGE`。密码只保存在服务器，
+不在脚本输出中展示，也不进入 Git、镜像或 GitHub Secrets。在自己的 SSH 终端查看：
 
 ```bash
-cd /opt/icloud-hme
-sudo docker compose config --quiet
-sudo docker compose pull
-sudo docker compose up -d --wait --wait-timeout 90
-sudo docker compose ps
-curl -fsS -o /dev/null http://127.0.0.1:8081/
+sudo cat /opt/icloud-hme/.env
 ```
 
-`config --quiet` 只验证，不打印包含管理员密码的完整配置。Compose 要求事先创建
-data 目录；目录权限错误应按 UID/GID 修正，不使用 chmod 777。
-容器根文件系统只读，只有 data 和临时目录可写；日志按 10 MiB × 3 轮转。
-健康检查确认 HTTP 首页可用，首次部署还需手动验证管理员登录和实际账号功能。
+需要修改密码、端口等参数时使用 `sudoedit /opt/icloud-hme/.env`。参数说明见
+[.env.example](.env.example)。含 `$` 或 `#` 的值用单引号包裹；不要把真实凭据提交到仓库。
+修改运行配置后，使用当前镜像重新应用（不拉取或构建镜像）：
 
-从 Mac 建立隧道，在浏览器打开 http://127.0.0.1:18081：
+```bash
+cd ~/projects/icloud-hme
+./deploy/oracle/deploy.sh apply
+```
+
+## 访问和检查
+
+在 Mac 建立 SSH 隧道，浏览器打开 `http://127.0.0.1:18081`，使用上述管理员密码登录：
 
 ```bash
 ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:18081:127.0.0.1:8081 oracle-a1
 ```
 
-模板只将容器端口发布到 O 机器的 127.0.0.1。此方式不需要新增公网 8081 放行。
-iCloud 账号、Cookie 和 App Password 通过管理界面配置，保存在受保护的 data 目录中，
-不进入 Git、镜像、构建上下文或 Actions Secrets。
+默认只发布 O 机器回环端口 8081，不新增公网入口，不改 OCI、UFW、iptables 或其他服务。
+端口改动后同步调整隧道。SSH 隧道的 HTTP 访问保持 `ICLOUD_HME_SECURE_COOKIE=false`；
+将来配置 HTTPS 反向代理时再改为 true，并核对 OCI 和主机防火墙。
 
-## 升级与回退
+```bash
+./deploy/oracle/deploy.sh status
+```
 
-每次升级先记录运维计划。在 O 机器的 `/opt/icloud-hme` 目录按顺序执行：
+健康检查确认首页可访问；首次部署还应检查管理员登录和实际账号功能。
+iCloud Cookie、App Password 等由用户通过管理界面添加，不进入发布流程。
+容器使用非 root 身份、只读根文件系统和独立 data 挂载，日志按 10 MiB × 3 轮转。
 
-1. 保存当前配置和旧镜像引用：
+## 回退与备份
 
-   ```bash
-   backup_dir="/opt/icloud-hme/backups/$(date +%Y%m%d-%H%M%S)"
-   sudo install -d -m 700 "$backup_dir"
-   sudo cp -p compose.yaml .env "$backup_dir/"
-   ```
+```bash
+./deploy/oracle/deploy.sh rollback
+```
 
-2. 通过 `sudoedit .env` 把镜像改成待升级的版本或 digest，执行
-   `sudo docker compose config --quiet` 和 `sudo docker compose pull`。
-   校验或拉取失败就停止升级，此时旧容器仍在运行。
+手动回退不拉代码、不构建，使用当前记录对应的上一版镜像和 Compose 模板，
+保留当前密码及业务数据；回退前也会创建备份。首次部署没有上一版本。
 
-3. 用 `sudo docker compose stop icloud-hme` 短暂停止该服务，再创建一致的数据备份：
+自动失败恢复会停掉失败版本，将其数据移至该次备份中的 `data.failed`，再恢复
+升级前 `data.tar.gz` 和配置，启动旧版本；首次部署失败只停止并移除失败容器，保留数据。
+每次失败都保留诊断和备份。若 Docker 本身不可用等原因导致自动恢复失败，脚本会报错，
+需要根据输出的备份路径手动处理。
 
-   ```bash
-   sudo tar -C /opt/icloud-hme -czf "$backup_dir/data.tar.gz" data
-   ```
+手动镜像回退不等于数据回退；有不兼容的数据格式变化时，先停止服务、保留当前数据，
+再恢复同版本的数据备份，并保留 UID/GID 10001:10001。业务恢复确认后再接受新写入。
+不要执行 `docker compose down -v`，不要在更新流程里删除旧镜像或全局清理 Docker。
+这些备份与服务位于同一台机器，仅用于升级恢复；机外备份另行配置。
 
-   备份失败时先恢复原 .env 并启动原镜像，不继续升级。
+## GitHub workflows 的用途
 
-4. 执行 `sudo docker compose up -d --wait --wait-timeout 90`，检查
-   `sudo docker compose ps`、管理员登录和数据；重启后需要重新登录。
-   此单容器方案存在短暂中断，不是滚动升级。
+| 触发 | 行为 |
+| --- | --- |
+| 推送 main / Pull request | `ci.yml` 运行前端、Go、部署脚本与 Compose 检查；不发布镜像、不部署 O 机器 |
+| 手动运行 Docker Image | CI 成功后发布 GHCR 双架构镜像；main 更新 latest，并发布 sha 标签 |
+| 推送新的 v* 版本标签 | Release 先运行 CI，再发布多平台二进制和版本镜像；不覆盖 latest |
 
-若新版本异常，保存失败状态，将镜像引用切回备份记录的旧 digest，重新启动并验证。
-若涉及不兼容的数据格式变更，先停服务并将当前 data 目录改名保留，再恢复同版本的数据
-备份，保持 UID/GID 为 10001:10001。镜像回退不等于数据回退。
+不必禁用整个 Actions。日常部署不依赖 GHCR；已有包和历史构建保留，正式版本发布时再用。
+如手动运行普通 `docker compose` 使用预构建镜像，需要设置 `ICLOUD_HME_IMAGE` 为
+实际存在的版本或 digest；脚本管理的服务器以 `current.json` 中的镜像为准。
 
-不要在升级过程中执行 `docker compose down -v` 或清理旧镜像。
-备份与服务器在同一台机器上，仅用于升级回退；机外备份需另行设置。
+Mac 使用 `origin` 指向自己的 fork，`upstream` 指向 `xiaozhou26/icloud-hme`；
+从 upstream 获取、合并及测试改动都在 Mac 完成。O 机器只快进拉取 origin/main。
 
 ## 配置依据
 
-- [GitHub：复用工作流](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)
-- [GitHub：GHCR 认证与镜像拉取](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
-- [GitHub：包可见性](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility)
-- [Docker：多架构构建](https://docs.docker.com/build/building/multi-platform/)
+- [Docker：构建镜像](https://docs.docker.com/reference/cli/docker/buildx/build/)
+- [Docker：Compose 更新与健康检查](https://docs.docker.com/reference/cli/docker/compose/up/)
+- [GitHub：工作流触发方式](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)

@@ -31,3 +31,6 @@ js
 accounts.json
 *.exe
 build/
+
+# Deployment helper cache
+/deploy/oracle/__pycache__/

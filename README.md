@@ -40,13 +40,12 @@ chmod +x icloud-hme_linux_amd64
 
 #### 方式二：Docker
 
-本 fork 使用 GitHub Actions 测试并发布镜像到 `ghcr.io/skykoo/icloud-hme`，支持
-`linux/amd64` 和 `linux/arm64`。镜像须在本 fork 的工作流成功运行后才可使用。
+本 fork 默认采用 **Mac 开发 → 推送代码 → O 机器拉取源码、构建 ARM64 镜像并更新容器**。
+在 O 机器仓库根目录运行 `./deploy/oracle/deploy.sh`，即可完成拉取、构建、备份、
+部署与健康检查；升级失败自动恢复旧版本。运行数据和密码独立保存在 `/opt/icloud-hme`。
 
-O 机器使用 [Compose 部署模板](deploy/oracle/compose.yaml) 和
-[环境变量模板](deploy/oracle/.env.example)。完整的 GitHub 配置、首次部署、SSH 隧道、
-升级与回退步骤见 [Mac 开发与 O 机器部署说明](deploy/oracle/README.md)。
-正式部署固定具体版本或 digest；账户数据单独挂载，密码在运行时注入。
+首次准备、SSH 隧道、日常升级及回退见 [Mac 开发与 O 机器部署说明](deploy/oracle/README.md)。
+GitHub Actions 保留自动测试；GHCR 双架构镜像改为手动或版本标签发布，日常部署无需等待。
 
 #### 方式三：源码编译（需要 Go 1.26+ 与 Node.js 22.12+ 双工具链）
 
@@ -531,16 +530,15 @@ GOOS=windows GOARCH=amd64 go build -o icloud-hme.exe .
 
 ### 发布
 
-- Pull request 运行前端与 Go 检查。
-- 推送 `main` 或手动运行 `Docker Image`：先调用同一提交的 CI，通过后发布双架构镜像；
-  镜像标签为 `sha-<提交前12位>`，`main` 还会更新 `latest`。
+- 推送 `main` 或 Pull request：运行前端、Go、部署脚本与 Compose 检查，不自动发布镜像。
+- 日常更新 O 机器：运行 `./deploy/oracle/deploy.sh`，由服务器从 origin/main 构建并部署。
+- 手动运行 `Docker Image`：先运行 CI，通过后发布双架构镜像；标签为
+  `sha-<提交前12位>`，在 main 上手动运行还会更新 `latest`。
 - 推送新的语义版本标签（例如 `v0.3.1`）：先运行 CI，通过后发布多平台二进制、
-  `ghcr.io/skykoo/icloud-hme:0.3.1` 等镜像标签并创建 Release。
-  版本发布不覆盖 main 的 `latest`。
+  版本镜像并创建 Release；不覆盖 `latest`。
 
-版本标签选用尚未使用的版本，并使用 `git push origin <具体标签>` 只推送该标签。
-服务器部署由管理员选择具体版本执行，不会随每次提交自动更新。
-详细设置和回退流程见 [部署说明](deploy/oracle/README.md)。
+版本标签选用尚未使用的版本，只执行 `git push origin <具体标签>`，不批量推送全部标签。
+服务器不会随每次提交自动更新；详细操作见 [部署说明](deploy/oracle/README.md)。
 
 ### 代码规范
 
@@ -594,12 +592,12 @@ chmod +x icloud-hme_linux_amd64
 
 #### Option 2: Docker
 
-This fork publishes tested `linux/amd64` and `linux/arm64` images to
-`ghcr.io/skykoo/icloud-hme`. Images become available after the fork's workflows run successfully.
-Use the [Compose template](deploy/oracle/compose.yaml) and
-[environment template](deploy/oracle/.env.example); see the
-[deployment guide](deploy/oracle/README.md) for setup, SSH access, upgrades, and rollback.
-Pin a version or digest, persist account data separately, and supply credentials at runtime.
+The default workflow is **develop on Mac → push code → pull, build ARM64, and deploy on O**.
+Run `./deploy/oracle/deploy.sh` on the server to pull origin/main, build from committed source,
+back up runtime data, and replace the container with health checks and recovery on failure.
+Credentials and data live separately under `/opt/icloud-hme`.
+See the [deployment guide](deploy/oracle/README.md) for setup, SSH access, upgrades, and rollback.
+GitHub Actions keeps automatic tests; GHCR publishing is optional via manual runs or version tags.
 
 #### Option 3: Build from source (Go 1.26+ and Node.js 22.12+)
 
