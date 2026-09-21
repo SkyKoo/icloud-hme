@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	http "github.com/bogdanfinn/fhttp"
 )
@@ -41,7 +42,7 @@ func TestWebMessageListReadsHeadersAndMatchesPreviewByFolderUID(t *testing.T) {
 			if expression["value"] != "To" || aliasFilter["value"] != "alias@icloud.com" || aliasFilter["type"] != "textMatch" {
 				t.Fatalf("incorrect recipient filter: %#v", aliasFilter)
 			}
-			return `{"domainObjects":[{"uid":6,"mboxRef":{"id":"box-junk"},"from":"Sender <sender@example.com>","to":"alias@icloud.com","subject":"code","stateInternalDate":1789980000000.5,"previewId":"opaque-preview-id"}]}`
+			return `{"domainObjects":[{"uid":6,"mboxRef":{"id":"box-junk"},"from":"Sender <sender@example.com>","to":"alias@icloud.com","subject":"code","stateInternalDate":1789980000.125,"previewId":"opaque-preview-id"}]}`
 		case "/mailws2/v1/message/preview":
 			if p["folder"] != "Junk" || p["sessionHeaders"].(map[string]any)["folder"] != "Junk" || p["previewIds"].([]any)[0] != "opaque-preview-id" {
 				t.Fatalf("wrong preview lookup: %#v", p)
@@ -59,6 +60,10 @@ func TestWebMessageListReadsHeadersAndMatchesPreviewByFolderUID(t *testing.T) {
 	m := messages[0]
 	if m.Folder != FolderJunk || m.ID != "6" || m.From == "" || m.To != "alias@icloud.com" || m.Preview != "123456" || m.Date == "" {
 		t.Fatalf("incomplete message: %#v", m)
+	}
+	date, err := time.Parse(time.RFC3339, m.Date)
+	if err != nil || date.UTC().Format(time.RFC3339) != "2026-09-21T08:40:00Z" {
+		t.Fatalf("wrong timestamp units: %q", m.Date)
 	}
 	if _, err := c.ListInbox(20, "Trash"); err == nil || calls != 2 {
 		t.Fatal("invalid scope reached upstream")

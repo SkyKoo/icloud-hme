@@ -120,6 +120,7 @@ type webMessageMetadata struct {
 	MailboxRef struct {
 		ID string `json:"id"`
 	} `json:"mboxRef"`
+	// stateInternalDate 使用带小数的 Unix 秒；不同于旧 thread/search 的毫秒。
 	Date      float64          `json:"stateInternalDate"`
 	From      string           `json:"from"`
 	To        string           `json:"to"`
@@ -131,7 +132,7 @@ type webMessageMetadata struct {
 func (m webMessageMetadata) summary(folder string) Message {
 	date := ""
 	if m.Date > 0 {
-		date = time.UnixMilli(int64(m.Date)).Format(time.RFC3339)
+		date = time.UnixMilli(int64(m.Date * 1000)).Format(time.RFC3339)
 	}
 	return Message{ID: strconv.FormatUint(uint64(m.UID), 10), Folder: folder, From: m.From, To: m.To, Subject: m.Subject, Date: date}
 }
