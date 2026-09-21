@@ -449,15 +449,16 @@ App Password 用于 IMAP 读取邮件,是邮件读取的优先路径 (支持服�
 `GET /api/inbox` 自动选择读取方式:
 
 1. **优先: IMAP (App Password)** — 设置了 App Password 时使用,支持服务端按收件人 (`TO`) 搜索
-2. **回退: Web API (Cookie)** — 无 App Password 或 IMAP 失败时,通过 `mccgateway` 端点读取,本地按别名过滤
+2. **回退: Web API (Cookie)** — 无 App Password 或 IMAP 失败时,通过 `mccgateway` 单封邮件接口读取,支持服务端按收件人过滤
 
 响应中包含 `"method": "web_api"` 或 `"method": "imap"` 字段,标识实际使用的读取方式。
 
 管理界面默认合并查询收件箱与垃圾邮件，可切换为单独查询；每封摘要的 `folder` 标识来源，
 合并后按时间倒序排列并应用总条数限制。查询不移动邮件或修改其垃圾分类。
 IMAP 自动识别垃圾邮件文件夹；Web API 使用 iCloud 的 `Junk` 文件夹。任一范围读取失败
-会报错，可切换到单个文件夹排查。Web API 摘要可能不包含收件人，按别名本地过滤可能漏信，
-此时选择别名“全部”或配置 IMAP。Web API 模式仅展示摘要，不提供基于 IMAP UID 的详情和删除操作。
+会报错，可切换到单个文件夹排查。Web API 从邮件头读取发件人和收件人，批量获取摘要；
+点击邮件主题可查看纯文本正文，保留已读状态，不下载附件或加载外部图片。
+Web API 模式暂不支持删除；IMAP 模式保留原有详情和删除功能。
 
 
 ## 项目架构

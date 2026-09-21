@@ -237,7 +237,8 @@ describe('AliasesPage', () => {
     )
     expect((screen.getByLabelText(/标签/) as HTMLInputElement).value.length).toBe(200)
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: /创建/ }))
-    expect(await screen.findByText('gamma@icloud.com')).toBeInTheDocument()
+    // 提示条与表格都会显示邮箱，限定到刷新后的表格行以避免时序歧义。
+    expect(await screen.findByRole('row', { name: /gamma@icloud\.com/ })).toBeInTheDocument()
   })
 
   it('停用别名:显示目标邮箱并二次确认', async () => {

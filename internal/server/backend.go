@@ -59,6 +59,7 @@ type Backend interface {
 	DeleteAlias(string, string) error
 	ListInbox(InboxQuery) (InboxResult, error)
 	GetMessage(string, uint32, string) (*mail.FullMessage, error)
+	GetWebMessage(string, uint32, string) (*mail.FullMessage, error)
 	DeleteMessage(string, uint32, string) error
 	Reload() error
 }
@@ -315,6 +316,18 @@ func (b *managerBackend) GetMessage(accountID string, uid uint32, folder string)
 		return nil, &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: "读取邮件详情失败"}
 	}
 	message.Folder = folder
+	return message, nil
+}
+
+func (b *managerBackend) GetWebMessage(accountID string, uid uint32, folder string) (*mail.FullMessage, error) {
+	mc, err := b.mgr.WebMailClient(accountID)
+	if err != nil {
+		return nil, mapAccountErr(err)
+	}
+	message, err := mc.GetFull(uid, folder)
+	if err != nil {
+		return nil, &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: "读取邮件详情失败，邮件可能已移动或会话已失效"}
+	}
 	return message, nil
 }
 

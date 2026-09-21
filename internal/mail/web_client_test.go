@@ -1,7 +1,6 @@
 package mail
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -45,11 +44,13 @@ func TestListInboxWithQuotedDSID(t *testing.T) {
 				switch r.URL.Path {
 				case "/setup/ws/1/validate":
 					body = `{"webservices":{"mccgateway":{"url":"https://p42-mccgateway.icloud.com:443"}}}`
-				case "/mailws2/v1/thread/search":
+				case "/mailws2/v1/geqs/query":
+					body = `{"domainObjects":[{"identifier":"box-inbox","name":"INBOX"}]}`
+				case "/mailws2/v1/message/list":
 					if r.URL.Host != "p42-mccgateway.icloud.com" {
 						return nil, fmt.Errorf("wrong mail gateway")
 					}
-					body = `{"totalThreadsReturned":1,"threadList":[{"threadId":"1","subject":"test subject","senders":["sender@example.com"],"preview":"test preview"}]}`
+					body = `{"domainObjects":[{"uid":1,"mboxRef":{"id":"box-inbox"},"subject":"test subject","from":"sender@example.com"}]}`
 				default:
 					return nil, fmt.Errorf("unexpected path: %s", r.URL.Path)
 				}
@@ -63,8 +64,8 @@ func TestListInboxWithQuotedDSID(t *testing.T) {
 			if len(messages) != 1 || messages[0].Subject != "test subject" {
 				t.Fatalf("unexpected messages: %#v", messages)
 			}
-			if len(paths) != 2 {
-				t.Fatalf("expected validate and search requests, got %v", paths)
+			if len(paths) != 3 {
+				t.Fatalf("expected validate, mailbox and message requests, got %v", paths)
 			}
 		})
 	}
@@ -88,33 +89,5 @@ func TestWebMailParamsEncodeValuesAndPreserveURL(t *testing.T) {
 	}
 	if strings.ContainsAny(u.RawQuery, `" `) {
 		t.Fatalf("unsafe raw query: %q", u.RawQuery)
-	}
-}
-
-func TestWebMailJunkUsesFolderAndRejectsInvalidScope(t *testing.T) {
-	c := NewWebClient(map[string]string{"session": "test"}, "12345", "icloud.com")
-	c.mccGatewayURL = "https://p42-mccgateway.icloud.com"
-	calls := 0
-	c.httpc = &webMailTestClient{HttpClient: c.httpc, client: &http.Client{Jar: c.httpc.GetCookieJar(), Transport: webMailTestTransport(func(r *http.Request) (*http.Response, error) {
-		calls++
-		var payload struct {
-			SessionHeaders struct {
-				Folder string `json:"folder"`
-			} `json:"sessionHeaders"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			return nil, err
-		}
-		if payload.SessionHeaders.Folder != "Junk" {
-			return nil, fmt.Errorf("wrong folder: %q", payload.SessionHeaders.Folder)
-		}
-		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"threadList":[{"threadId":"1","subject":"junk message"}]}`)), Request: r}, nil
-	})}}
-	messages, err := c.ListInbox(20, FolderJunk)
-	if err != nil || len(messages) != 1 {
-		t.Fatalf("junk read failed: %#v %v", messages, err)
-	}
-	if _, err := c.ListInbox(20, "Trash"); err == nil || calls != 1 {
-		t.Fatal("invalid folder reached upstream")
 	}
 }

@@ -40,16 +40,19 @@ export default function InboxPage() {
   const [retryKey, setRetryKey] = useState(0)
   const [detail, setDetail] = useState<FullMessage | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [detailMethod, setDetailMethod] = useState<'imap' | 'web_api'>('imap')
   const [deleteFor, setDeleteFor] = useState<InboxMessage | null>(null)
   const [deleting, setDeleting] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
   const { show } = useToast()
 
-  async function openMessage(message: InboxMessage) {
+  async function openMessage(message: InboxMessage, method: InboxResult['method']) {
+    setDetailMethod(method)
+    setDetail(null)
     setDetailLoading(true)
     try {
-      const data = await request<FullMessage>(`/api/inbox/${encodeURIComponent(message.id)}?account_id=${encodeURIComponent(accountId)}&folder=${message.folder ?? 'inbox'}`)
+      const data = await request<FullMessage>(`/api/inbox/${encodeURIComponent(message.id)}?account_id=${encodeURIComponent(accountId)}&folder=${message.folder ?? 'inbox'}&method=${method}`)
       setDetail(data)
     } catch (err) {
       show(err instanceof ApiError ? err.message : '读取邮件详情失败')
@@ -277,7 +280,6 @@ export default function InboxPage() {
         </div>
       </div>
 
-      {result?.method === 'web_api' && alias && <p className="hint">按别名筛选可能遗漏收件人信息不完整的邮件；找不到时，请将“别名”切换为“全部”。</p>}
       <AsyncState
         loading={loading}
         error={error}
@@ -313,7 +315,7 @@ export default function InboxPage() {
                   {result.messages.map((m) => (
                     <tr key={`${m.folder ?? 'inbox'}:${m.id}`}>
                       <td><span className={m.folder === 'junk' ? 'badge badge-pending' : 'badge badge-neutral'}>{m.folder === 'junk' ? '垃圾邮件' : '收件箱'}</span></td>
-                      <td>{result.method === 'imap' ? <button className="link-button" onClick={() => void openMessage(m)}>{m.subject || '（无主题）'}</button> : (m.subject || '（无主题）')}</td>
+                      <td><button className="link-button" onClick={() => void openMessage(m, result.method)}>{m.subject || '（无主题）'}</button></td>
                       <td>{m.from}</td>
                       <td>{m.to}</td>
                       <td>{formatDate(m.date)}</td>
@@ -333,7 +335,7 @@ export default function InboxPage() {
           <p className="hint">收件人：{detail.to}</p>
           <p className="hint">日期：{formatDate(detail.date)}</p>
           <pre className="mail-body">{detail.body || '无正文'}</pre>
-          <div className="form-actions"><button className="danger" onClick={() => setDeleteFor(detail)}>删除邮件</button><button onClick={() => setDetail(null)}>关闭</button></div>
+          <div className="form-actions">{detailMethod === 'imap' && <button className="danger" onClick={() => setDeleteFor(detail)}>删除邮件</button>}<button onClick={() => setDetail(null)}>关闭</button></div>
         </>}
       </Dialog>
       {deleteFor && <ConfirmDialog title="删除邮件" message={`邮件将从${deleteFor.folder === 'junk' ? '垃圾邮件' : '收件箱'}中永久删除。`} open busy={deleting} onClose={() => setDeleteFor(null)} onConfirm={() => void deleteMessage()} />}

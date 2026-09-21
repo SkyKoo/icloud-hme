@@ -349,4 +349,28 @@ describe('InboxPage', () => {
     expect(new URL(deleteUrl).searchParams.get('folder')).toBe('junk')
   })
 
+  it('Web 邮件可以查看正文，带上读取方式和来源且不显示删除按钮', async () => {
+    let detailURL = ''
+    server.use(
+      http.get('/api/accounts', () => HttpResponse.json({ success: true, data: accounts })),
+      http.get('/api/inbox', () => HttpResponse.json({ success: true, data: {
+        ...inboxResult, method: 'web_api', messages: [{ ...inboxResult.messages[0], folder: 'junk' }],
+      } })),
+      http.get('/api/inbox/:id', ({ request }) => {
+        detailURL = request.url
+        return HttpResponse.json({ success: true, data: {
+          ...inboxResult.messages[0], folder: 'junk', content_type: 'text/plain', body: '正文 <img src="https://tracker.example/a">',
+        } })
+      }),
+    )
+    renderPage()
+    await userEvent.setup().click(await screen.findByRole('button', { name: '主题一' }))
+    expect(await screen.findByText('正文 <img src="https://tracker.example/a">')).toBeInTheDocument()
+    const url = new URL(detailURL)
+    expect(url.searchParams.get('folder')).toBe('junk')
+    expect(url.searchParams.get('method')).toBe('web_api')
+    expect(screen.queryByRole('button', { name: '删除邮件' })).not.toBeInTheDocument()
+    expect(document.querySelector('img')).toBeNull()
+  })
+
 })

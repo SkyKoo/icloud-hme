@@ -270,11 +270,21 @@ func (s *Server) getMessageHandler(c *gin.Context) {
 
 	accountID := c.Query("account_id")
 	uid, err := strconv.ParseUint(c.Param("message_id"), 10, 32)
-	if accountID == "" || err != nil {
+	if accountID == "" || err != nil || uid == 0 {
 		failCode(c, http.StatusBadRequest, "VALIDATION_ERROR", "account_id 或邮件 ID 无效")
 		return
 	}
-	message, err := s.be.GetMessage(accountID, uint32(uid), folder)
+	method := c.DefaultQuery("method", "imap")
+	if method != "imap" && method != "web_api" {
+		failCode(c, http.StatusBadRequest, "VALIDATION_ERROR", "参数错误: method 需为 imap 或 web_api")
+		return
+	}
+	var message *mail.FullMessage
+	if method == "web_api" {
+		message, err = s.be.GetWebMessage(accountID, uint32(uid), folder)
+	} else {
+		message, err = s.be.GetMessage(accountID, uint32(uid), folder)
+	}
 	if err != nil {
 		backendFail(c, err)
 		return
@@ -289,9 +299,14 @@ func (s *Server) deleteMessageHandler(c *gin.Context) {
 		return
 	}
 
+	if c.DefaultQuery("method", "imap") != "imap" {
+		failCode(c, http.StatusBadRequest, "VALIDATION_ERROR", "Web API 邮件暂不支持删除")
+		return
+	}
+
 	accountID := c.Query("account_id")
 	uid, err := strconv.ParseUint(c.Param("message_id"), 10, 32)
-	if accountID == "" || err != nil {
+	if accountID == "" || err != nil || uid == 0 {
 		failCode(c, http.StatusBadRequest, "VALIDATION_ERROR", "account_id 或邮件 ID 无效")
 		return
 	}

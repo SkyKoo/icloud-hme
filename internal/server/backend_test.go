@@ -137,6 +137,11 @@ func (f *fakeBackend) GetMessage(accountID string, uid uint32, folder string) (*
 	return &mail.FullMessage{Message: mail.Message{ID: fmt.Sprint(uid)}}, nil
 }
 
+func (f *fakeBackend) GetWebMessage(accountID string, uid uint32, folder string) (*mail.FullMessage, error) {
+	f.detailFolder = "web_api:" + folder
+	return &mail.FullMessage{Message: mail.Message{ID: fmt.Sprint(uid), Folder: folder}, Body: "web body"}, nil
+}
+
 func (f *fakeBackend) DeleteMessage(accountID string, uid uint32, folder string) error {
 	f.deletedFolder = folder
 	return nil

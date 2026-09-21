@@ -283,17 +283,20 @@ GET /api/inbox?account_id=acc_1&folder=all&alias=xyz123@icloud.com&limit=20&days
 }
 ```
 
-`method` 为 `imap` 或 `web_api`。IMAP 路径支持服务端按收件人搜索；Web API 路径拉取后本地过滤。
+`method` 为 `imap` 或 `web_api`。两种路径均支持服务端按收件人搜索。Web API 按单封邮件返回，ID 为所选文件夹内的 UID，不再使用旧版 thread ID。
 
 响应的 `data.folder` 表示所选范围，`messages[].folder` 为该邮件的 `inbox` 或 `junk` 来源。
 合并时按邮件时间倒序，保留不同文件夹内相同编号的邮件；查询不会移动邮件或修改垃圾分类。
-任一文件夹读取失败时返回错误，不将部分结果当成完整结果。Web API 摘要可能缺少收件人，
-按别名过滤可能漏信，可不传 `alias` 或使用 IMAP。
+任一文件夹读取失败时返回错误，不将部分结果当成完整结果。Web API 从邮件头读取发件人、收件人和主题，并批量获取摘要。
 
-IMAP 邮件详情 `GET /api/inbox/:message_id` 和删除 `DELETE /api/inbox/:message_id`
-均接受 `account_id` 与 `folder=inbox|junk`（详情/删除不传时保持默认 `inbox`）。
-必须使用该邮件返回的来源和 IMAP UID，不能使用合并范围 `all`；Web API thread ID
-不是 IMAP UID，不支持这两个操作。删除仍要求管理员会话和 CSRF。
+邮件详情 `GET /api/inbox/:message_id` 接受 `account_id`、`folder=inbox|junk` 和
+`method=imap|web_api`，必须使用列表返回的 UID、来源文件夹和读取方式。
+为兼容旧 IMAP 客户端，省略时默认 `folder=inbox&method=imap`，不能使用合并范围 `all`。
+Web 正文读取保留已读状态，HTML 转为纯文本，不下载附件或加载外部图片。
+
+删除 `DELETE /api/inbox/:message_id` 仅支持 IMAP，接受同样的账号与文件夹参数；
+`method=web_api` 会被拒绝，不能将 iCloud Web UID 用于外部 IMAP 邮箱。
+删除仍要求管理员会话和 CSRF。
 
 
 ### 14. 列出别名
@@ -406,9 +409,11 @@ curl -b cookies.txt "$BASE/api/inbox?account_id=acc_1&limit=10"
 
 ## 技术说明
 
-**Web API 路径** (`internal/mail/web_client.go`)：
-1. 调用 `setup.icloud.com.cn/setup/ws/1/validate` 获取 `mccgateway` URL
-2. 调用 `mccgateway/mailws2/v1/thread/search` 读取邮件
+**Web API 路径** (`internal/mail/web_client.go`、`web_messages.go`)：
+1. 调用账号对应区域的 `setup/ws/1/validate` 获取 `mccgateway` URL。
+2. 通过 `mailws2/v1/geqs/query` 查询收件箱与垃圾邮件的标识。
+3. 使用 `mailws2/v1/message/list` 读取邮件头及正文部分元数据，再批量调用 `message/preview`。
+4. 点击主题时，通过 `message/get` 读取文本正文，显式设置 `dontMarkAsRead=true`。
 
 **⚠️ 已知坑：**
 - `validate` 返回的 mccgateway URL 可能带 `:443` 端口，tls-client 的 cookie jar 按不带端口的 host 存储 cookie，带端口请求时 cookie 无法附加导致 403；**解决：** 解析 URL 后剥离端口号
