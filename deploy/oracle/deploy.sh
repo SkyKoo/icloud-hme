@@ -32,7 +32,7 @@ cd "$repo"
 # 持有仓库级锁，避免两个发布同时拉取、构建或切换容器。
 exec 9>"$(git rev-parse --git-path icloud-hme-deploy.lock)"
 flock -n 9 || { echo '已有部署正在执行。' >&2; exit 1; }
-sudo -v
+sudo -n true
 
 if [[ "$action" == deploy ]]; then
   [[ $(uname -m) == aarch64 ]] || { echo '当前模板仅用于 ARM64 O 机器。' >&2; exit 1; }
@@ -44,11 +44,11 @@ if [[ "$action" == deploy ]]; then
   image="icloud-hme:sha-${commit:0:12}-$(date -u +%Y%m%d%H%M%S)"
   echo "构建提交 $commit → $image（旧容器继续运行）"
   # 只打包已提交文件；忽略本机未跟踪文件，确保镜像与提交号对应。
-  git archive --format=tar "$commit" | sudo docker build \
+  git archive --format=tar "$commit" | sudo -n docker build \
     --platform linux/arm64 --label "org.opencontainers.image.revision=$commit" \
     -t "$image" -
-  sudo python3 "$repo/deploy/oracle/deploy.py" deploy \
+  sudo -n python3 "$repo/deploy/oracle/deploy.py" deploy \
     --image "$image" --commit "$commit" --template "$repo/deploy/oracle/compose.yaml"
 else
-  sudo python3 "$repo/deploy/oracle/deploy.py" "$action"
+  sudo -n python3 "$repo/deploy/oracle/deploy.py" "$action"
 fi
