@@ -10,8 +10,6 @@
 **/.env
 **/.env.*
 !**/.env.example
-/deploy/oracle/data/
-/deploy/oracle/backups/
 CLAUDE.md
 # Claude sessions
 /.claude/
@@ -31,6 +29,3 @@ js
 accounts.json
 *.exe
 build/
-
-# Deployment helper cache
-/deploy/oracle/__pycache__/

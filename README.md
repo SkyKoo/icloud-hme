@@ -40,12 +40,20 @@ chmod +x icloud-hme_linux_amd64
 
 #### 方式二：Docker
 
-本 fork 默认采用 **Mac 开发 → 推送代码 → O 机器拉取源码、构建 ARM64 镜像并更新容器**。
-在 O 机器仓库根目录运行 `./deploy/oracle/deploy.sh`，即可完成拉取、构建、备份、
-部署与健康检查；升级失败自动恢复旧版本。运行数据和密码独立保存在 `/opt/icloud-hme`。
+可以使用仓库中的 Dockerfile 构建当前平台的镜像：
 
-首次准备、SSH 隧道、日常升级及回退见 [Mac 开发与 O 机器部署说明](deploy/oracle/README.md)。
-GitHub Actions 保留自动测试；GHCR 双架构镜像改为手动或版本标签发布，日常部署无需等待。
+```bash
+docker build -t icloud-hme:local .
+export ICLOUD_HME_ADMIN_PASSWORD='replace-with-a-strong-password'
+docker run -d --name icloud-hme \
+  -p 127.0.0.1:8081:8081 \
+  -e ICLOUD_HME_ADMIN_PASSWORD \
+  -v icloud-hme-data:/app/data \
+  icloud-hme:local -addr :8081 -data /app/data
+```
+
+浏览器访问 `http://localhost:8081`。账户数据保存在独立 Docker 卷中，管理员密码在运行时传入。
+也可使用本 fork 按需发布的 `ghcr.io/skykoo/icloud-hme` 镜像，选择已发布的具体版本或 digest。
 
 #### 方式三：源码编译（需要 Go 1.26+ 与 Node.js 22.12+ 双工具链）
 
@@ -530,15 +538,13 @@ GOOS=windows GOARCH=amd64 go build -o icloud-hme.exe .
 
 ### 发布
 
-- 推送 `main` 或 Pull request：运行前端、Go、部署脚本与 Compose 检查，不自动发布镜像。
-- 日常更新 O 机器：运行 `./deploy/oracle/deploy.sh`，由服务器从 origin/main 构建并部署。
-- 手动运行 `Docker Image`：先运行 CI，通过后发布双架构镜像；标签为
-  `sha-<提交前12位>`，在 main 上手动运行还会更新 `latest`。
+- 推送 `main` 或 Pull request：运行前端与 Go 检查，不自动发布镜像。
+- 手动运行 `Docker Image`：先运行 CI，通过后发布 `linux/amd64` 和 `linux/arm64`
+  镜像；标签为 `sha-<提交前12位>`，在 main 上手动运行还会更新 `latest`。
 - 推送新的语义版本标签（例如 `v0.3.1`）：先运行 CI，通过后发布多平台二进制、
   版本镜像并创建 Release；不覆盖 `latest`。
 
 版本标签选用尚未使用的版本，只执行 `git push origin <具体标签>`，不批量推送全部标签。
-服务器不会随每次提交自动更新；详细操作见 [部署说明](deploy/oracle/README.md)。
 
 ### 代码规范
 
@@ -592,12 +598,21 @@ chmod +x icloud-hme_linux_amd64
 
 #### Option 2: Docker
 
-The default workflow is **develop on Mac → push code → pull, build ARM64, and deploy on O**.
-Run `./deploy/oracle/deploy.sh` on the server to pull origin/main, build from committed source,
-back up runtime data, and replace the container with health checks and recovery on failure.
-Credentials and data live separately under `/opt/icloud-hme`.
-See the [deployment guide](deploy/oracle/README.md) for setup, SSH access, upgrades, and rollback.
-GitHub Actions keeps automatic tests; GHCR publishing is optional via manual runs or version tags.
+Build an image for the current platform using the repository's Dockerfile:
+
+```bash
+docker build -t icloud-hme:local .
+export ICLOUD_HME_ADMIN_PASSWORD='replace-with-a-strong-password'
+docker run -d --name icloud-hme \
+  -p 127.0.0.1:8081:8081 \
+  -e ICLOUD_HME_ADMIN_PASSWORD \
+  -v icloud-hme-data:/app/data \
+  icloud-hme:local -addr :8081 -data /app/data
+```
+
+Open `http://localhost:8081`. Account data lives in a separate Docker volume; credentials are supplied at runtime.
+You can also use a published version or digest of `ghcr.io/skykoo/icloud-hme`.
+Images are published on demand through manual workflow runs or version tags.
 
 #### Option 3: Build from source (Go 1.26+ and Node.js 22.12+)
 

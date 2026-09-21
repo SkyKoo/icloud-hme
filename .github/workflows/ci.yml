@@ -67,14 +67,3 @@ jobs:
 
       - name: Build
         run: go build ./internal/... .
-
-      - name: Check deployment scripts
-        run: |
-          bash -n deploy/oracle/deploy.sh
-          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s deploy/oracle -p 'test_*.py' -v
-
-      - name: Validate deployment template
-        env:
-          ICLOUD_HME_IMAGE: ghcr.io/skykoo/icloud-hme:ci-validation
-          ICLOUD_HME_ADMIN_PASSWORD: ci-validation-only-not-deployed
-        run: docker compose -f deploy/oracle/compose.yaml config --quiet
