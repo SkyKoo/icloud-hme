@@ -41,7 +41,7 @@ func TestWebMessageListReadsHeadersAndMatchesPreviewByFolderUID(t *testing.T) {
 			if expression["value"] != "To" || aliasFilter["value"] != "alias@icloud.com" || aliasFilter["type"] != "textMatch" {
 				t.Fatalf("incorrect recipient filter: %#v", aliasFilter)
 			}
-			return `{"domainObjects":[{"uid":6,"mboxRef":{"id":"box-junk"},"from":"Sender <sender@example.com>","to":"alias@icloud.com","subject":"code","stateInternalDate":1789980000000,"previewId":"opaque-preview-id"}]}`
+			return `{"domainObjects":[{"uid":6,"mboxRef":{"id":"box-junk"},"from":"Sender <sender@example.com>","to":"alias@icloud.com","subject":"code","stateInternalDate":1789980000000.5,"previewId":"opaque-preview-id"}]}`
 		case "/mailws2/v1/message/preview":
 			if p["folder"] != "Junk" || p["sessionHeaders"].(map[string]any)["folder"] != "Junk" || p["previewIds"].([]any)[0] != "opaque-preview-id" {
 				t.Fatalf("wrong preview lookup: %#v", p)

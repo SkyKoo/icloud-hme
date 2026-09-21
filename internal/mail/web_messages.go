@@ -120,7 +120,7 @@ type webMessageMetadata struct {
 	MailboxRef struct {
 		ID string `json:"id"`
 	} `json:"mboxRef"`
-	Date      int64            `json:"stateInternalDate"`
+	Date      float64          `json:"stateInternalDate"`
 	From      string           `json:"from"`
 	To        string           `json:"to"`
 	Subject   string           `json:"subject"`
@@ -131,7 +131,7 @@ type webMessageMetadata struct {
 func (m webMessageMetadata) summary(folder string) Message {
 	date := ""
 	if m.Date > 0 {
-		date = time.UnixMilli(m.Date).Format(time.RFC3339)
+		date = time.UnixMilli(int64(m.Date)).Format(time.RFC3339)
 	}
 	return Message{ID: strconv.FormatUint(uint64(m.UID), 10), Folder: folder, From: m.From, To: m.To, Subject: m.Subject, Date: date}
 }
