@@ -47,9 +47,10 @@ func NewWebClient(cookies map[string]string, dsid, host string) *WebClient {
 		host = "icloud.com"
 	}
 
+	// Cookie 中的 DSID 可能保留外层引号，不能将其作为账号标识的一部分。
 	c := &WebClient{
 		cookies:  cookies,
-		dsid:     dsid,
+		dsid:     strings.Trim(strings.TrimSpace(dsid), `"`),
 		clientID: uuid.New().String(),
 		host:     host,
 		httpc:    httpc,
@@ -103,12 +104,17 @@ func (c *WebClient) setCommonHeaders(req *http.Request) {
 
 // withParams 给 URL 追加 clientBuildNumber / clientId / dsid 查询参数。
 func (c *WebClient) withParams(rawURL string) string {
-	sep := "?"
-	if strings.Contains(rawURL, "?") {
-		sep = "&"
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
 	}
-	return fmt.Sprintf("%s%sclientBuildNumber=%s&clientMasteringNumber=%s&clientId=%s&dsid=%s",
-		rawURL, sep, WebClientBuildNumber, WebClientBuildNumber, c.clientID, c.dsid)
+	q := u.Query()
+	q.Set("clientBuildNumber", WebClientBuildNumber)
+	q.Set("clientMasteringNumber", WebClientBuildNumber)
+	q.Set("clientId", c.clientID)
+	q.Set("dsid", c.dsid)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // resolveMccGateway 从 validate 响应中获取 mccgateway URL。
