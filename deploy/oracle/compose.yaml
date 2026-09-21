@@ -1,0 +1,39 @@
+name: icloud-hme
+
+services:
+  icloud-hme:
+    image: ${ICLOUD_HME_IMAGE:?Set ICLOUD_HME_IMAGE to a published version or digest}
+    platform: linux/arm64
+    restart: unless-stopped
+    user: "10001:10001"
+    command: ["-addr", ":8081", "-data", "/app/data"]
+    ports:
+      - "127.0.0.1:${ICLOUD_HME_BIND_PORT:-8081}:8081"
+    environment:
+      ICLOUD_HME_ADMIN_PASSWORD: ${ICLOUD_HME_ADMIN_PASSWORD:?Set a unique administrator password}
+      ICLOUD_HME_SESSION_TTL: ${ICLOUD_HME_SESSION_TTL:-12h}
+      ICLOUD_HME_SECURE_COOKIE: ${ICLOUD_HME_SECURE_COOKIE:-false}
+    volumes:
+      - type: bind
+        source: ./data
+        target: /app/data
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8081/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

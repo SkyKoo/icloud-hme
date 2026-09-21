@@ -21,7 +21,7 @@
 
 #### 方式一：下载二进制发布版（推荐）
 
-从 [GitHub Releases](https://github.com/xiaozhou26/icloud-hme/releases) 下载对应平台的二进制文件：
+从 [GitHub Releases](https://github.com/SkyKoo/icloud-hme/releases) 下载对应平台的二进制文件：
 
 | 平台 | 文件 |
 |---|---|
@@ -40,28 +40,19 @@ chmod +x icloud-hme_linux_amd64
 
 #### 方式二：Docker
 
-```bash
-# 拉取镜像
-docker pull ghcr.io/xiaozhou26/icloud-hme:latest
+本 fork 使用 GitHub Actions 测试并发布镜像到 `ghcr.io/skykoo/icloud-hme`，支持
+`linux/amd64` 和 `linux/arm64`。镜像须在本 fork 的工作流成功运行后才可使用。
 
-# 运行（将本机 data 目录挂载进去）
-docker run -d \
-  --name icloud-hme \
-  -p 8081:8081 \
-  -v /path/to/data:/app/data \
-  -e ICLOUD_HME_ADMIN_PASSWORD='change-this-before-running-2026' \
-  ghcr.io/xiaozhou26/icloud-hme:latest
-```
-
-> ⚠️ 上面的密码仅为示例，**不可照抄**，请务必更换为至少 8 字符的强密码。
-
-镜像支持 `linux/amd64` 和 `linux/arm64` 双架构，自动适配。
+O 机器使用 [Compose 部署模板](deploy/oracle/compose.yaml) 和
+[环境变量模板](deploy/oracle/.env.example)。完整的 GitHub 配置、首次部署、SSH 隧道、
+升级与回退步骤见 [Mac 开发与 O 机器部署说明](deploy/oracle/README.md)。
+正式部署固定具体版本或 digest；账户数据单独挂载，密码在运行时注入。
 
 #### 方式三：源码编译（需要 Go 1.26+ 与 Node.js 22.12+ 双工具链）
 
 ```bash
 # 前置要求: Go 1.26+、Node.js 22.12+
-git clone https://github.com/xiaozhou26/icloud-hme.git
+git clone https://github.com/SkyKoo/icloud-hme.git
 cd icloud-hme
 
 # 一键构建（安装前端依赖 → 前端测试 → 前端构建 → Go 测试 → 编译）
@@ -540,13 +531,16 @@ GOOS=windows GOARCH=amd64 go build -o icloud-hme.exe .
 
 ### 发布
 
-推送 `v*` tag 到 GitHub 自动触发 CI：
+- Pull request 运行前端与 Go 检查。
+- 推送 `main` 或手动运行 `Docker Image`：先调用同一提交的 CI，通过后发布双架构镜像；
+  镜像标签为 `sha-<提交前12位>`，`main` 还会更新 `latest`。
+- 推送新的语义版本标签（例如 `v0.3.1`）：先运行 CI，通过后发布多平台二进制、
+  `ghcr.io/skykoo/icloud-hme:0.3.1` 等镜像标签并创建 Release。
+  版本发布不覆盖 main 的 `latest`。
 
-```bash
-git tag v0.2.0 && git push origin --tags
-```
-
-Actions 会自动构建多平台二进制、Docker 镜像（`ghcr.io/xiaozhou26/icloud-hme`）并创建 Release。
+版本标签选用尚未使用的版本，并使用 `git push origin <具体标签>` 只推送该标签。
+服务器部署由管理员选择具体版本执行，不会随每次提交自动更新。
+详细设置和回退流程见 [部署说明](deploy/oracle/README.md)。
 
 ### 代码规范
 
@@ -581,7 +575,7 @@ A local management tool for Apple iCloud Hide My Email (HME) aliases, supporting
 
 #### Option 1: Binary (GitHub Releases)
 
-Download the latest binary from [GitHub Releases](https://github.com/xiaozhou26/icloud-hme/releases):
+Download the latest binary from [GitHub Releases](https://github.com/SkyKoo/icloud-hme/releases):
 
 | Platform | File |
 |---|---|
@@ -600,23 +594,17 @@ chmod +x icloud-hme_linux_amd64
 
 #### Option 2: Docker
 
-```bash
-docker pull ghcr.io/xiaozhou26/icloud-hme:latest
-
-docker run -d \
-  --name icloud-hme \
-  -p 8081:8081 \
-  -v /path/to/data:/app/data \
-  -e ICLOUD_HME_ADMIN_PASSWORD='change-this-before-running-2026' \
-  ghcr.io/xiaozhou26/icloud-hme:latest
-```
-
-> The password above is only an example — do NOT copy it. Use a strong password with at least 8 characters.
+This fork publishes tested `linux/amd64` and `linux/arm64` images to
+`ghcr.io/skykoo/icloud-hme`. Images become available after the fork's workflows run successfully.
+Use the [Compose template](deploy/oracle/compose.yaml) and
+[environment template](deploy/oracle/.env.example); see the
+[deployment guide](deploy/oracle/README.md) for setup, SSH access, upgrades, and rollback.
+Pin a version or digest, persist account data separately, and supply credentials at runtime.
 
 #### Option 3: Build from source (Go 1.26+ and Node.js 22.12+)
 
 ```bash
-git clone https://github.com/xiaozhou26/icloud-hme.git
+git clone https://github.com/SkyKoo/icloud-hme.git
 cd icloud-hme
 
 # One-shot build (frontend deps → frontend test → frontend build → Go test → binary)

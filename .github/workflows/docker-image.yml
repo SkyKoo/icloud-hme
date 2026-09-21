@@ -7,12 +7,25 @@ on:
 
 permissions:
   contents: read
-  packages: write
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  checks:
+    name: Test before publishing
+    uses: ./.github/workflows/ci.yml
+
   docker:
     name: Build & push GHCR image
+    needs: checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DOCKER_METADATA_SHORT_SHA_LENGTH: 12
     steps:
       - uses: actions/checkout@v4
 
@@ -41,7 +54,7 @@ jobs:
         with:
           context: .
           push: true
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

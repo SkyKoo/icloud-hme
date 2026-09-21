@@ -1,0 +1,43 @@
+# 本地历史、编辑器与 Agent 状态
+.git
+.github
+.DS_Store
+.idea
+.vscode
+.claude
+.codex
+.ccg
+.superpowers
+
+# 运行数据和凭据不得进入构建层或缓存
+**/.env
+**/.env.*
+!**/.env.example
+**/data
+**/logs
+**/backups
+**/accounts.json
+**/*.pem
+**/*.key
+**/.ssh
+**/*.log
+
+# 在镜像内部重新安装依赖并生成前端产物
+**/node_modules
+internal/webui/dist
+build
+icloud-hme
+icloud-hme_*
+*.exe
+coverage
+**/.cache
+**/.npm
+**/.npm-cache
+**/*.tsbuildinfo
+
+# 部署说明和本地诊断文件不参与构建
+deploy
+docs
+reverse_task
+fresh-req.json
+js

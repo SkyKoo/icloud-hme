@@ -6,13 +6,21 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  checks:
+    name: Test before releasing
+    uses: ./.github/workflows/ci.yml
+
   # ─────────────────── 二进制发布 ───────────────────
   binaries:
     name: Build binaries
+    needs: checks
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -24,16 +32,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Download tested frontend
+        uses: actions/download-artifact@v4
         with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Build frontend
-        run: |
-          npm --prefix web ci
-          npm --prefix web run build
+          name: webui-dist
+          path: internal/webui/dist/
 
       - uses: actions/setup-go@v5
         with:
@@ -59,7 +62,11 @@ jobs:
   # ─────────────────── Docker 镜像 ───────────────────
   docker:
     name: Build & push Docker image
+    needs: checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -79,10 +86,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build & push
         uses: docker/build-push-action@v6
@@ -100,6 +107,8 @@ jobs:
     name: Create GitHub Release
     needs: [binaries, docker]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:

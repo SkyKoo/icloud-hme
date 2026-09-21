@@ -1,9 +1,8 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -66,3 +65,9 @@ jobs:
 
       - name: Build
         run: go build ./internal/... .
+
+      - name: Validate deployment template
+        env:
+          ICLOUD_HME_IMAGE: ghcr.io/skykoo/icloud-hme:ci-validation
+          ICLOUD_HME_ADMIN_PASSWORD: ci-validation-only-not-deployed
+        run: docker compose -f deploy/oracle/compose.yaml config --quiet

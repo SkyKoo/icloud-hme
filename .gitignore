@@ -7,7 +7,11 @@
 /logs/
 
 # Environment
-/.env
+**/.env
+**/.env.*
+!**/.env.example
+/deploy/oracle/data/
+/deploy/oracle/backups/
 CLAUDE.md
 # Claude sessions
 /.claude/
