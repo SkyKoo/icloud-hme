@@ -7,6 +7,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"icloud-hme/internal/account"
@@ -187,11 +188,19 @@ type loginAccountReq struct {
 func (s *Server) loginAccountHandler(c *gin.Context) {
 	id := c.Param("id")
 	var req loginAccountReq
-	if err := c.ShouldBindJSON(&req); err != nil || req.Password == "" {
-		failCode(c, http.StatusBadRequest, "VALIDATION_ERROR", "参数错误: password 必填")
+	if err := c.ShouldBindJSON(&req); err != nil || (req.Password == "" && req.OTPCode == "") {
+		failCode(c, http.StatusBadRequest, "VALIDATION_ERROR", "参数错误: 请输入密码或本次登录的验证码")
 		return
 	}
-	sum, err := s.be.LoginAccount(id, req.Password, req.OTPCode)
+	if req.OTPCode != "" {
+		if len(req.OTPCode) != 6 || strings.IndexFunc(req.OTPCode, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+			failCode(c, http.StatusBadRequest, "VALIDATION_ERROR", "请输入 6 位数字验证码")
+			return
+		}
+		// 兼容旧页面的请求，但续接只使用验证码，绝不重新提交密码。
+		req.Password = ""
+	}
+	sum, err := s.be.LoginAccount(id, c.GetString("session_id"), req.Password, req.OTPCode)
 	if err != nil {
 		backendFail(c, err)
 		return

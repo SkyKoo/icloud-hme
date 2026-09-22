@@ -41,10 +41,11 @@ const (
 	LoginTermsRequired
 	LoginRateLimited
 	LoginInvalidResponse
+	LoginExpired
 )
 
 func (k LoginFailure) String() string {
-	return map[LoginFailure]string{LoginUnavailable: "unavailable", LoginRejected: "rejected", LoginOTPRequired: "otp_required", LoginOTPInvalid: "otp_invalid", LoginTermsRequired: "terms_required", LoginRateLimited: "rate_limited", LoginInvalidResponse: "invalid_response"}[k]
+	return map[LoginFailure]string{LoginUnavailable: "unavailable", LoginRejected: "rejected", LoginOTPRequired: "otp_required", LoginOTPInvalid: "otp_invalid", LoginTermsRequired: "terms_required", LoginRateLimited: "rate_limited", LoginInvalidResponse: "invalid_response", LoginExpired: "expired"}[k]
 }
 
 // LoginError 只携带枚举和状态码；不持有原始响应、密码、Cookie 或代理 URL。

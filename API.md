@@ -21,7 +21,7 @@ HTTP JSON API，所有接口返回统一格式：
 }
 ```
 
-**稳定错误码：** `AUTH_REQUIRED`、`INVALID_CREDENTIALS`、`RATE_LIMITED`、`CSRF_INVALID`、`VALIDATION_ERROR`、`ACCOUNT_NOT_FOUND`、`OTP_REQUIRED`、`OTP_INVALID`、`UPSTREAM_UNAUTHORIZED`、`UPSTREAM_FAILURE`、`ICLOUD_LOGIN_REJECTED`、`ICLOUD_LOGIN_FAILED`、`ICLOUD_LOGIN_PROTOCOL_ERROR`、`ICLOUD_LOGIN_ACTION_REQUIRED`、`ICLOUD_LOGIN_RATE_LIMITED`、`INTERNAL_ERROR`
+**稳定错误码：** `AUTH_REQUIRED`、`INVALID_CREDENTIALS`、`RATE_LIMITED`、`CSRF_INVALID`、`VALIDATION_ERROR`、`ACCOUNT_NOT_FOUND`、`OTP_REQUIRED`、`OTP_INVALID`、`ICLOUD_LOGIN_EXPIRED`、`UPSTREAM_UNAUTHORIZED`、`UPSTREAM_FAILURE`、`ICLOUD_LOGIN_REJECTED`、`ICLOUD_LOGIN_FAILED`、`ICLOUD_LOGIN_PROTOCOL_ERROR`、`ICLOUD_LOGIN_ACTION_REQUIRED`、`ICLOUD_LOGIN_RATE_LIMITED`、`INTERNAL_ERROR`
 
 **安全约定：**
 
@@ -199,10 +199,12 @@ X-CSRF-Token: <token>
 POST /api/accounts/:id/login
 X-CSRF-Token: <token>
 
-{"password": "用户的常规iCloud密码", "otp_code": "123456"}
+{"password": "用户的常规iCloud密码"}
 ```
 
-- `otp_code` 可选，启用 2FA 时使用
+- 首次只提交 `password`。收到 `409 OTP_REQUIRED` 后，在同一管理台会话中再次调用此端点，提交 `{"otp_code":"123456"}`，不需要再次提交密码。
+- 验证码续接首次认证的客户端与 Cookie jar，不会重启密码登录。临时状态只保存在内存中，绑定管理台会话与账号，5 分钟过期，最多尝试 5 次验证码；同时最多保留 32 个登录流程。
+- 过期、服务重启、已完成或找不到本次登录：`409 ICLOUD_LOGIN_EXPIRED`，需重新从密码步骤开始。
 - 需要 OTP：`409 OTP_REQUIRED`
 - 验证码错误：`401 OTP_INVALID`
 - Apple 拒绝本次登录：`401 ICLOUD_LOGIN_REJECTED`，提示失败阶段与 Apple HTTP 状态；不将所有拒绝都判断为密码错误。
@@ -210,7 +212,7 @@ X-CSRF-Token: <token>
 - 网络/上游故障：`502 ICLOUD_LOGIN_FAILED`；无效认证响应：`502 ICLOUD_LOGIN_PROTOCOL_ERROR`。
 - 登录错误不会提示“已有 Cookie 失效”；`OTP_INVALID`、`ICLOUD_LOGIN_REJECTED` 不会退出 HME 管理台。
 - 服务端新增诊断仅记录固定阶段、错误类别和上游状态码，不记录密码、验证码、Cookie、完整 URL 或上游响应体。
-- 成功：**只返回 `Summary`，绝不返回 Cookies**（Cookie 自动持久化到账号配置）
+- 成功：**只返回 `Summary`，绝不返回 Cookies**（只有新会话校验成功才持久化 Cookie；失败保留原配置）
 
 ### 11. 删除账号
 

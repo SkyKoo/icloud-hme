@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -49,6 +50,7 @@ type authState struct {
 	scnt       string
 	authToken  string
 	trustToken string
+	country    string
 	dsid       string
 }
 
@@ -57,6 +59,7 @@ type authState struct {
 // 登录成功后,可以通过 client.GetCookies() 获取 Cookie。
 // 启用 2FA 时,会调用 otpProvider 获取验证码。
 func (c *Client) Login(username, password string, otpProvider OTPProvider) error {
+	c.pendingAuth = nil
 	state := &authState{
 		username: username,
 	}
@@ -104,6 +107,27 @@ func (c *Client) Login(username, password string, otpProvider OTPProvider) error
 		return WrapLoginError(LoginComplete, err)
 	}
 
+	return c.finishLogin(state)
+}
+
+// ContinueLogin 在同一个客户端、Cookie jar 和 Apple 会话中提交验证码。调用方负责串行化与过期管理。
+func (c *Client) ContinueLogin(otp string) error {
+	state := c.pendingAuth
+	if state == nil {
+		return &LoginError{Stage: LoginOTP, Kind: LoginExpired}
+	}
+	if err := c.verifyOTP(state, otp); err != nil {
+		var failure *LoginError
+		if !errors.As(err, &failure) || failure.Kind != LoginOTPInvalid {
+			c.pendingAuth = nil
+		}
+		return err
+	}
+	c.pendingAuth = nil
+	return c.finishLogin(state)
+}
+
+func (c *Client) finishLogin(state *authState) error {
 	// 9. 信任设备
 	if err := c.getTrust(state); err != nil {
 		return WrapLoginError(LoginTrust, err)
@@ -141,12 +165,12 @@ func (c *Client) authStart(state *authState) error {
 		return err
 	}
 	defer resp.Body.Close()
+	state.captureHeaders(resp.Header)
 
 	if resp.StatusCode != 200 {
 		return &HTTPStatusError{StatusCode: resp.StatusCode}
 	}
 
-	state.authAttr = resp.Header.Get("X-Apple-Auth-Attributes")
 	return nil
 }
 
@@ -166,6 +190,7 @@ func (c *Client) authFederate(state *authState) error {
 		return err
 	}
 	defer resp.Body.Close()
+	state.captureHeaders(resp.Header)
 
 	if resp.StatusCode != 200 {
 		return &HTTPStatusError{StatusCode: resp.StatusCode}
@@ -208,6 +233,7 @@ func (c *Client) authInit(state *authState, a string) (*authInitResp, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	state.captureHeaders(resp.Header)
 
 	if resp.StatusCode != 200 {
 		return nil, &HTTPStatusError{StatusCode: resp.StatusCode}
@@ -253,6 +279,7 @@ func (c *Client) authComplete(state *authState, m1, m2 string, otpProvider OTPPr
 		return err
 	}
 	defer resp.Body.Close()
+	state.captureHeaders(resp.Header)
 
 	switch resp.StatusCode {
 	case 200:
@@ -271,10 +298,10 @@ func (c *Client) authComplete(state *authState, m1, m2 string, otpProvider OTPPr
 
 // handleTwoFactor 处理双重认证
 func (c *Client) handleTwoFactor(state *authState, signinResp *http.Response, otpProvider OTPProvider) error {
-	state.sessionID = signinResp.Header.Get("X-Apple-ID-Session-Id")
-	state.scnt = signinResp.Header.Get("scnt")
+	state.captureHeaders(signinResp.Header)
 
 	if otpProvider == nil {
+		c.pendingAuth = state
 		return &LoginError{Stage: LoginOTP, Kind: LoginOTPRequired, Status: signinResp.StatusCode}
 	}
 
@@ -283,6 +310,10 @@ func (c *Client) handleTwoFactor(state *authState, signinResp *http.Response, ot
 		return WrapLoginError(LoginOTP, err)
 	}
 
+	return c.verifyOTP(state, otp)
+}
+
+func (c *Client) verifyOTP(state *authState, otp string) error {
 	// 提交 2FA 验证码
 	reqBody := map[string]interface{}{
 		"securityCode": map[string]string{"code": otp},
@@ -302,14 +333,12 @@ func (c *Client) handleTwoFactor(state *authState, signinResp *http.Response, ot
 		return WrapLoginError(LoginOTP, err)
 	}
 	defer resp.Body.Close()
+	state.captureHeaders(resp.Header)
 
 	if resp.StatusCode != 204 {
 		return WrapLoginError(LoginOTP, &HTTPStatusError{StatusCode: resp.StatusCode})
 	}
 
-	if newScnt := resp.Header.Get("scnt"); newScnt != "" {
-		state.scnt = newScnt
-	}
 	return nil
 }
 
@@ -327,22 +356,33 @@ func (c *Client) getTrust(state *authState) error {
 		return err
 	}
 	defer resp.Body.Close()
+	state.captureHeaders(resp.Header)
 
 	if resp.StatusCode != 204 {
 		return &HTTPStatusError{StatusCode: resp.StatusCode}
 	}
 
-	state.authToken = resp.Header.Get("X-Apple-Session-Token")
-	state.trustToken = resp.Header.Get("X-Apple-TwoSV-Trust-Token")
 	return nil
 }
 
 // authenticateWeb 认证 iCloud Web 服务
 func (c *Client) authenticateWeb(state *authState) error {
-	body := fmt.Sprintf(`{"dsWebAuthToken":"%s","accountCountryCode":"USA","extended_login":true,"trustToken":"%s"}`,
-		state.authToken, state.trustToken)
-
-	req, err := http.NewRequest("POST", authWebFmt, bytes.NewReader([]byte(body)))
+	if state.authToken == "" {
+		return &LoginError{Stage: LoginWebSession, Kind: LoginInvalidResponse}
+	}
+	payload := map[string]interface{}{
+		"dsWebAuthToken": state.authToken,
+		"extended_login": true,
+		"trustToken":     state.trustToken,
+	}
+	if state.country != "" {
+		payload["accountCountryCode"] = state.country
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("POST", c.SetupURL()+"/accountLogin", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -356,6 +396,7 @@ func (c *Client) authenticateWeb(state *authState) error {
 		return err
 	}
 	defer resp.Body.Close()
+	state.captureHeaders(resp.Header)
 
 	if resp.StatusCode != 200 {
 		return &HTTPStatusError{StatusCode: resp.StatusCode}
@@ -373,7 +414,7 @@ func (c *Client) authenticateWeb(state *authState) error {
 
 	// 复制 idmsa.apple.com 的 Cookie 到 icloud.com
 	u1, _ := url.Parse("https://idmsa.apple.com")
-	u2, _ := url.Parse("https://icloud.com")
+	u2, _ := url.Parse("https://" + c.Host)
 	cookies := c.httpc.GetCookies(u1)
 	c.httpc.SetCookies(u2, cookies)
 
@@ -399,6 +440,19 @@ func (c *Client) updateAuthHeaders(header http.Header, state *authState) http.He
 		header.Set("X-Apple-ID-Session-Id", state.sessionID)
 	}
 
+	// 与 authorize 中的客户端和 frame 保持一致，供 Apple 将令牌签发给当前 iCloud 登录。
+	header.Set("X-Apple-Widget-Key", state.clientId)
+	header.Set("X-Apple-Oauth-Client-Id", state.clientId)
+	header.Set("X-Apple-Oauth-Client-Type", "firstPartyAuth")
+	header.Set("X-Apple-Oauth-Redirect-URI", "https://www.icloud.com")
+	header.Set("X-Apple-Oauth-Require-Grant-Code", "true")
+	header.Set("X-Apple-Oauth-Response-Mode", "web_message")
+	header.Set("X-Apple-Oauth-Response-Type", "code")
+	header.Set("X-Apple-Oauth-State", "auth-"+state.frameId)
+	header.Set("X-Apple-Frame-Id", "auth-"+state.frameId)
+	if state.authAttr != "" {
+		header.Set("X-Apple-Auth-Attributes", state.authAttr)
+	}
 	header.Set("X-Requested-With", "XMLHttpRequest")
 	header.Set("Content-Type", "application/json")
 	header.Set("Accept", "application/json")
@@ -420,4 +474,29 @@ func (c *Client) Validate() (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// captureHeaders 累积认证响应头：验证码响应可能携带会话令牌，trust 响应只补充信任令牌。
+func (state *authState) captureHeaders(header http.Header) {
+	for name, target := range map[string]*string{
+		"X-Apple-ID-Session-Id":      &state.sessionID,
+		"scnt":                       &state.scnt,
+		"X-Apple-Auth-Attributes":    &state.authAttr,
+		"X-Apple-Session-Token":      &state.authToken,
+		"X-Apple-TwoSV-Trust-Token":  &state.trustToken,
+		"X-Apple-ID-Account-Country": &state.country,
+	} {
+		if value := header.Get(name); value != "" {
+			*target = value
+		}
+	}
+}
+
+// GetCookies 返回会话 Cookie 的副本；只应在服务端保存，不返回给管理台。
+func (c *Client) GetCookies() map[string]string {
+	cookies := make(map[string]string, len(c.Cookies))
+	for name, value := range c.Cookies {
+		cookies[name] = value
+	}
+	return cookies
 }

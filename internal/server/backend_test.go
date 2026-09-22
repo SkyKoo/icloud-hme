@@ -22,19 +22,22 @@ type fakeBackend struct {
 	inbox    InboxResult
 	created  *hme.CreateResult
 
-	addedInput   account.AddAccountInput
-	updatedID    string
-	updatedInput account.UpdateAccountInput
-	proxyID      string
-	proxyValue   string
-	cookiesID    string
-	cookiesValue string
-	appPwdID     string
-	appPwdEmail  string
-	loginID      string
-	loginErr     error
-	removedID    string
-	removedOK    bool
+	addedInput    account.AddAccountInput
+	updatedID     string
+	updatedInput  account.UpdateAccountInput
+	proxyID       string
+	proxyValue    string
+	cookiesID     string
+	cookiesValue  string
+	appPwdID      string
+	appPwdEmail   string
+	loginID       string
+	loginSession  string
+	loginPassword string
+	loginOTP      string
+	loginErr      error
+	removedID     string
+	removedOK     bool
 
 	aliasActID     string
 	aliasActActive bool
@@ -93,8 +96,8 @@ func (f *fakeBackend) SetMailbox(id string, config account.MailboxConfig) (accou
 	return f.accounts[0], nil
 }
 
-func (f *fakeBackend) LoginAccount(id, password, otp string) (account.Summary, error) {
-	f.loginID = id
+func (f *fakeBackend) LoginAccount(id, sessionID, password, otp string) (account.Summary, error) {
+	f.loginID, f.loginSession, f.loginPassword, f.loginOTP = id, sessionID, password, otp
 	if f.loginErr != nil {
 		return account.Summary{}, f.loginErr
 	}

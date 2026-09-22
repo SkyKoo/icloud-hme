@@ -157,9 +157,11 @@ describe('AccountsPage', () => {
 
   it('iCloud 登录收到 OTP_REQUIRED 后只显示 OTP 输入并可重试', async () => {
     let calls = 0
+    const bodies: unknown[] = []
     server.use(
       http.get('/api/accounts', () => HttpResponse.json({ success: true, data: accounts })),
-      http.post('/api/accounts/:id/login', async () => {
+      http.post('/api/accounts/:id/login', async ({ request }) => {
+        bodies.push(await request.json())
         calls++
         if (calls === 1) {
           return HttpResponse.json(
@@ -184,6 +186,32 @@ describe('AccountsPage', () => {
     dialog = screen.getByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: /验证/ }))
     await waitFor(() => expect(calls).toBe(2))
+    expect(bodies).toEqual([{ password: 'p@ssw0rd' }, { otp_code: '123456' }])
+  })
+
+  it('验证码会话过期后清空凭据并返回密码步骤', async () => {
+    let calls = 0
+    server.use(
+      http.get('/api/accounts', () => HttpResponse.json({ success: true, data: accounts })),
+      http.post('/api/accounts/:id/login', () => {
+        calls++
+        return HttpResponse.json(
+          { success: false, code: calls === 1 ? 'OTP_REQUIRED' : 'ICLOUD_LOGIN_EXPIRED', message: '本次登录已结束或超时，请重新输入 Apple 账户密码获取新验证码' },
+          { status: 409 },
+        )
+      }),
+    )
+    renderPage()
+    await screen.findByText('活跃号')
+    const user = userEvent.setup()
+    await user.click(screen.getAllByRole('button', { name: /iCloud 登录/ })[0])
+    await user.type(screen.getByLabelText('密码'), 'synthetic-password')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '登录' }))
+    await user.type(await screen.findByLabelText('验证码'), '123456')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '验证' }))
+    expect(await screen.findByLabelText('密码')).toHaveValue('')
+    expect(screen.queryByLabelText('验证码')).not.toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('重新输入')
   })
 
   it('iCloud 登录拒绝后可重试，取消后清空密码与错误', async () => {

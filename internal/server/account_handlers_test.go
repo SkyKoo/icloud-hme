@@ -251,3 +251,29 @@ func TestAccountDeleteNotFound(t *testing.T) {
 }
 
 var _ = io.Discard
+
+func TestAccountLoginOTPOnlyUsesAdminSession(t *testing.T) {
+	f := &fakeBackend{accounts: []account.Summary{{ID: "synthetic", Name: "synthetic"}}}
+	s := newWithBackend(f, Config{AdminPassword: "admin-pass-2026-strong"})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	sess, csrf := login(t, ts, "admin-pass-2026-strong")
+	for _, body := range []string{`{"otp_code":"123456"}`, `{"password":"legacy-password","otp_code":"123456"}`} {
+		req := authedReq(t, ts, "POST", "/api/accounts/synthetic/login", body)
+		req.AddCookie(&http.Cookie{Name: "hme_session", Value: sess})
+		req.Header.Set("X-CSRF-Token", csrf)
+		status, _, _ := do(t, req)
+		if status != 200 || f.loginSession != sess || f.loginPassword != "" || f.loginOTP != "123456" {
+			t.Fatal("OTP failed to continue under current admin session")
+		}
+	}
+	for _, body := range []string{`{"otp_code":"123"}`, `{"otp_code":"abcdef"}`, `{}`} {
+		req := authedReq(t, ts, "POST", "/api/accounts/synthetic/login", body)
+		req.AddCookie(&http.Cookie{Name: "hme_session", Value: sess})
+		req.Header.Set("X-CSRF-Token", csrf)
+		status, _, _ := do(t, req)
+		if status != 400 {
+			t.Fatal("invalid OTP accepted")
+		}
+	}
+}

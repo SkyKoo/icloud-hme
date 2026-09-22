@@ -278,27 +278,16 @@ POST /api/accounts
 
 #### 账号登录（获取 Cookie）
 
-```bash
-POST /api/accounts/:id/login
+使用已登录的管理台会话与 CSRF token 调用 `POST /api/accounts/:id/login`：
 
-# 请求体
-{
-  "password": "用户的常规iCloud密码",  # 不是 App Password
-  "otp_code": "123456"                  # 可选,2FA 验证码
-}
+1. 提交 `{"password":"Apple 账户登录密码"}`，这里使用常规密码，而非 App 专用密码。
+2. 若返回 `409 OTP_REQUIRED`，在同一管理台会话中提交 `{"otp_code":"123456"}`。
+   验证码沿用首次认证状态，不重复提交密码。
+3. 成功后只返回账号安全摘要（如 `id`、`has_cookies`），新 Cookie 校验成功后由服务端保存，响应不包含 Cookie。
 
-# 响应
-{
-  "success": true,
-  "data": {
-    "id": "acc_1",
-    "cookies": {
-      "x-apple-session-token": "...",
-      "X-APPLE-WEBAUTH-TOKEN": "..."
-    }
-  }
-}
-```
+临时认证状态只保留在服务端内存，不保存密码或验证码；5 分钟过期，最多 5 次验证码
+尝试。收到 `ICLOUD_LOGIN_EXPIRED` 或服务重启后，需重新从密码步骤开始。
+详细响应与错误码见 [API 文档](API.md#10-icloud-密码登录获取-cookie)。
 
 #### 删除账号
 

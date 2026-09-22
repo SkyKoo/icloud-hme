@@ -37,10 +37,7 @@ export default function ICloudLoginDialog({
     try {
       await request(`/api/accounts/${accountId}/login`, {
         method: 'POST',
-        body: JSON.stringify({
-          password,
-          ...(otpRequired ? { otp_code: otp } : {}),
-        }),
+        body: JSON.stringify(otpRequired ? { otp_code: otp } : { password }),
       })
       setPassword('')
       setOtp('')
@@ -48,8 +45,14 @@ export default function ICloudLoginDialog({
       onSaved()
     } catch (err) {
       if (err instanceof ApiError && err.code === 'OTP_REQUIRED') {
+        setPassword('')
         setOtpRequired(true)
       } else {
+        if (otpRequired && !(err instanceof ApiError && err.code === 'OTP_INVALID')) {
+          setPassword('')
+          setOtp('')
+          setOtpRequired(false)
+        }
         setError(err instanceof ApiError ? err.message : '网络连接失败，请检查服务状态')
       }
     } finally {

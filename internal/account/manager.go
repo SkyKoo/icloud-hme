@@ -49,11 +49,14 @@ type MailboxConfig struct {
 
 // Manager 管理多个 iCloud 账号,线程安全。
 type Manager struct {
-	mu       sync.RWMutex
-	accounts map[string]*Account
-	dataDir  string
-	dataFile string
-	imapPool *mail.Pool // IMAP 长连接池
+	mu             sync.RWMutex
+	accounts       map[string]*Account
+	dataDir        string
+	dataFile       string
+	imapPool       *mail.Pool // IMAP 长连接池
+	loginMu        sync.Mutex
+	logins         map[loginKey]*pendingLogin
+	newLoginClient func(string, string) (loginClient, error)
 }
 
 // cloneCookies 返回 Cookie map 的独立副本。
@@ -97,6 +100,12 @@ func NewManager(dataDir string) (*Manager, error) {
 
 // Close 释放 IMAP 连接池等资源。
 func (m *Manager) Close() {
+	m.loginMu.Lock()
+	for key, pending := range m.logins {
+		pending.timer.Stop()
+		delete(m.logins, key)
+	}
+	m.loginMu.Unlock()
 	if m.imapPool != nil {
 		m.imapPool.Close()
 	}
@@ -515,40 +524,9 @@ func (m *Manager) HMEClientWithPassword(id, password string, otpProvider hme.OTP
 		return nil, err
 	}
 
-	// 先保存 accountLogin 返回的 Cookie，随后通过 validate 刷新会话并再次持久化。
-	// 国区与美区都走同一条刷新链路，避免只保存登录阶段的临时 token。
-	if err := m.SaveCookies(id, client.Cookies); err != nil {
-		return nil, hme.WrapLoginError(hme.LoginSave, err)
+	if _, err := m.validateAndSaveLogin(id, client); err != nil {
+		return nil, err
 	}
-	if err := client.ValidateSession(); err != nil {
-		// validate 的失败响应也可能携带 Set-Cookie，尽量保留服务端最新状态。
-		_ = m.SaveCookies(id, client.Cookies)
-		return nil, hme.WrapLoginError(hme.LoginValidate, err)
-	}
-
-	// 保存 validate 刷新后的 Cookie 和账号状态。
-	m.mu.Lock()
-	cur, ok := m.accounts[id]
-	if !ok {
-		m.mu.Unlock()
-		return nil, fmt.Errorf("账号不存在: %s", id)
-	}
-	cur.Cookies = cloneCookies(client.Cookies)
-	cur.Status = "active"
-	cur.LastValidated = time.Now().Format(time.RFC3339)
-	cur.LastError = ""
-	if info := client.AccountInfo(); info != nil {
-		cur.RealEmail = firstNonEmpty(info.AppleID, info.PrimaryEmail)
-		if cur.ICloudEmail == "" {
-			cur.ICloudEmail = deriveICloudEmail(info)
-		}
-	}
-	saveErr := m.save()
-	m.mu.Unlock()
-	if saveErr != nil {
-		return nil, hme.WrapLoginError(hme.LoginSave, saveErr)
-	}
-
 	return client, nil
 }
 

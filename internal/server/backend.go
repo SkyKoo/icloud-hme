@@ -53,7 +53,7 @@ type Backend interface {
 	UpdateCookies(string, string) (account.Summary, error)
 	SetAppPassword(string, string, string) (account.Summary, error)
 	SetMailbox(string, account.MailboxConfig) (account.Summary, error)
-	LoginAccount(string, string, string) (account.Summary, error)
+	LoginAccount(string, string, string, string) (account.Summary, error)
 	RemoveAccount(string) bool
 	CreateAlias(string, string) (*hme.CreateResult, error)
 	ListAliases(string) ([]hme.Alias, error)
@@ -155,24 +155,13 @@ func (b *managerBackend) SetMailbox(id string, config account.MailboxConfig) (ac
 }
 
 // LoginAccount 使用 iCloud 密码登录账号,成功只返回 Summary,绝不返回 Cookies。
-func (b *managerBackend) LoginAccount(id, password, otpCode string) (account.Summary, error) {
-	var otpProvider hme.OTPProvider
-	if otpCode != "" {
-		otp := otpCode
-		otpProvider = func() (string, error) { return otp, nil }
-	}
-
-	client, err := b.mgr.HMEClientWithPassword(id, password, otpProvider)
+func (b *managerBackend) LoginAccount(id, sessionID, password, otpCode string) (account.Summary, error) {
+	sum, err := b.mgr.LoginAccount(id, sessionID, password, otpCode)
 	if err != nil {
 		logLoginFailure(err)
 		return account.Summary{}, classifyLoginErr(err)
 	}
-	_ = client
-	sum, ok := b.mgr.GetAccount(id)
-	if !ok {
-		return account.Summary{}, &BackendError{Status: http.StatusNotFound, Code: "ACCOUNT_NOT_FOUND", Message: "账号不存在"}
-	}
-	return sum.Summary(), nil
+	return sum, nil
 }
 
 // classifyLoginErr 把 iCloud 登录错误映射为稳定错误。
@@ -186,6 +175,8 @@ func classifyLoginErr(err error) *BackendError {
 		switch failure.Kind {
 		case hme.LoginOTPRequired:
 			return &BackendError{Status: 409, Code: "OTP_REQUIRED", Message: "请输入 Apple 受信任设备上的验证码"}
+		case hme.LoginExpired:
+			return &BackendError{Status: 409, Code: "ICLOUD_LOGIN_EXPIRED", Message: "本次登录已结束或超时，请重新输入 Apple 账户密码获取新验证码"}
 		case hme.LoginOTPInvalid:
 			return &BackendError{Status: 401, Code: "OTP_INVALID", Message: "Apple 未接受验证码，请检查最新验证码后重试"}
 		case hme.LoginTermsRequired:

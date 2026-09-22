@@ -93,7 +93,11 @@ func TestLoginFailureStages(t *testing.T) {
 					status = tt.status
 					body = tt.body
 				}
-				return authResponse(r, status, body), nil
+				resp := authResponse(r, status, body)
+				if r.URL.Path == "/appleauth/auth/signin/complete" && status == 200 {
+					resp.Header.Set("X-Apple-Session-Token", "synthetic-session-token")
+				}
+				return resp, nil
 			}}
 			var otp OTPProvider
 			if tt.otp {
@@ -146,7 +150,11 @@ func TestLoginChallengeRoundTrip(t *testing.T) {
 			u, _ := url.Parse(c.Origin())
 			c.httpc.SetCookies(u, []*http.Cookie{{Name: "X-APPLE-WEBAUTH-TOKEN", Value: "synthetic-token", Path: "/"}})
 		}
-		return authResponse(r, status, body), nil
+		resp := authResponse(r, status, body)
+		if r.URL.Path == "/appleauth/auth/signin/complete" && status == 200 {
+			resp.Header.Set("X-Apple-Session-Token", "synthetic-session-token")
+		}
+		return resp, nil
 	}}
 	if err := c.Login("test@example.com", "synthetic-password", nil); err != nil {
 		t.Fatal(err)
@@ -200,5 +208,146 @@ func TestVerboseRequestDoesNotExposeSecrets(t *testing.T) {
 		if strings.Contains(string(output)+requestErr.Error(), secret) {
 			t.Fatalf("verbose output exposed %s", secret)
 		}
+	}
+}
+
+func TestOTPTokenSurvivesTrust(t *testing.T) {
+	c, err := NewClient(nil, "icloud.com", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &authState{}
+	c.httpc = &loginHTTPStub{HttpClient: c.httpc, respond: func(r *http.Request) (*http.Response, error) {
+		resp := authResponse(r, 204, "")
+		if strings.Contains(r.URL.Path, "verify/trusteddevice") {
+			resp.Header.Set("X-Apple-Session-Token", "synthetic-session-token")
+		} else {
+			resp.Header.Set("X-Apple-TwoSV-Trust-Token", "synthetic-trust-token")
+		}
+		return resp, nil
+	}}
+	if err := c.handleTwoFactor(state, authResponse(nil, 409, ""), func() (string, error) { return "123456", nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.getTrust(state); err != nil {
+		t.Fatal(err)
+	}
+	if state.authToken != "synthetic-session-token" || state.trustToken != "synthetic-trust-token" {
+		t.Fatal("OTP session token was lost while obtaining trust token")
+	}
+}
+
+func TestTwoPhaseLoginPreservesSession(t *testing.T) {
+	for _, host := range []string{"icloud.com", "icloud.com.cn"} {
+		t.Run(host, func(t *testing.T) {
+			c, err := NewClient(nil, host, "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := map[string]int{}
+			c.httpc = &loginHTTPStub{HttpClient: c.httpc, respond: func(r *http.Request) (*http.Response, error) {
+				path := r.URL.Path
+				calls[path]++
+				resp := authResponse(r, 200, `{}`)
+				switch {
+				case strings.Contains(path, "authorize/signin"):
+					c.httpc.SetCookies(r.URL, []*http.Cookie{{Name: "synthetic-auth", Value: "same-jar", Path: "/"}})
+				case path == "/appleauth/auth/signin/init":
+					resp = authResponse(r, 200, `{"iteration":2,"salt":"c2FsdA==","b":"Ag==","c":"server-challenge","protocol":"s2k"}`)
+				case path == "/appleauth/auth/signin/complete":
+					resp = authResponse(r, 409, `{}`)
+					resp.Header.Set("X-Apple-ID-Session-Id", "synthetic-session")
+					resp.Header.Set("scnt", "first-scnt")
+					resp.Header.Set("X-Apple-ID-Account-Country", "CHN")
+				case strings.Contains(path, "verify/trusteddevice"):
+					if r.Header.Get("X-Apple-Widget-Key") != OAuthClientID || r.Header.Get("X-Apple-Oauth-Client-Id") != OAuthClientID || r.Header.Get("X-Apple-Frame-Id") == "auth-" {
+						t.Fatal("OTP lost OAuth client identity")
+					}
+					var payload struct {
+						SecurityCode struct {
+							Code string `json:"code"`
+						} `json:"securityCode"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+						t.Fatal(err)
+					}
+					scnt := "first-scnt"
+					if calls[path] > 1 {
+						scnt = "retry-scnt"
+					}
+					if r.Header.Get("X-Apple-ID-Session-Id") != "synthetic-session" || r.Header.Get("scnt") != scnt {
+						t.Fatal("OTP lost the original login session")
+					}
+					cookies := c.httpc.GetCookies(r.URL)
+					if len(cookies) != 1 || cookies[0].Value != "same-jar" {
+						t.Fatal("OTP lost the original cookie jar")
+					}
+					if payload.SecurityCode.Code == "000000" {
+						resp = authResponse(r, 400, `{}`)
+						resp.Header.Set("scnt", "retry-scnt")
+					} else {
+						resp = authResponse(r, 204, "")
+						resp.Header.Set("scnt", "verified-scnt")
+						resp.Header.Set("X-Apple-Session-Token", "synthetic-session-token")
+					}
+				case path == "/appleauth/auth/2sv/trust":
+					if r.Header.Get("scnt") != "verified-scnt" {
+						t.Fatal("trust lost updated scnt")
+					}
+					resp = authResponse(r, 204, "")
+					resp.Header.Set("X-Apple-TwoSV-Trust-Token", "synthetic-trust-token")
+				case path == "/setup/ws/1/accountLogin":
+					var payload map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+						t.Fatal(err)
+					}
+					if payload["dsWebAuthToken"] != "synthetic-session-token" || payload["trustToken"] != "synthetic-trust-token" || payload["accountCountryCode"] != "CHN" {
+						t.Fatal("incorrect session token/country handoff")
+					}
+					if r.URL.Host != "setup."+host {
+						t.Fatal("wrong regional setup host")
+					}
+					resp = authResponse(r, 200, `{"dsInfo":{"dsid":"123"}}`)
+					u, _ := url.Parse(c.Origin())
+					c.httpc.SetCookies(u, []*http.Cookie{{Name: "X-APPLE-WEBAUTH-TOKEN", Value: "synthetic-cookie", Path: "/"}})
+				}
+				return resp, nil
+			}}
+			assertKind := func(err error, kind LoginFailure) {
+				t.Helper()
+				var failure *LoginError
+				if !errors.As(err, &failure) || failure.Kind != kind {
+					t.Fatalf("unexpected result: %v", err)
+				}
+			}
+			assertKind(c.Login("synthetic@example.com", "synthetic-password", nil), LoginOTPRequired)
+			assertKind(c.ContinueLogin("000000"), LoginOTPInvalid)
+			if err := c.ContinueLogin("123456"); err != nil {
+				t.Fatal(err)
+			}
+			assertKind(c.ContinueLogin("123456"), LoginExpired)
+			if calls["/appleauth/auth/signin/init"] != 1 || calls["/appleauth/auth/signin/complete"] != 1 || calls["/setup/ws/1/accountLogin"] != 1 {
+				t.Fatal("OTP restarted or replayed login")
+			}
+			if c.GetCookies()["X-APPLE-WEBAUTH-TOKEN"] != "synthetic-cookie" {
+				t.Fatal("new cookie missing")
+			}
+		})
+	}
+}
+
+func TestAuthenticateWebRejectsMissingToken(t *testing.T) {
+	c, err := NewClient(nil, "icloud.com", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.httpc = &loginHTTPStub{HttpClient: c.httpc, respond: func(*http.Request) (*http.Response, error) {
+		t.Fatal("sent an empty auth token to Apple")
+		return nil, nil
+	}}
+	var failure *LoginError
+	err = c.authenticateWeb(&authState{})
+	if !errors.As(err, &failure) || failure.Kind != LoginInvalidResponse || failure.Stage != LoginWebSession {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -29,6 +29,7 @@ func TestTypedLoginFailureMappingAndSafeLogs(t *testing.T) {
 		{hme.LoginStart, hme.LoginRejected, 403, 401, "ICLOUD_LOGIN_REJECTED"},
 		{hme.LoginComplete, hme.LoginRejected, 401, 401, "ICLOUD_LOGIN_REJECTED"},
 		{hme.LoginOTP, hme.LoginOTPRequired, 409, 409, "OTP_REQUIRED"},
+		{hme.LoginOTP, hme.LoginExpired, 0, 409, "ICLOUD_LOGIN_EXPIRED"},
 		{hme.LoginOTP, hme.LoginOTPInvalid, 400, 401, "OTP_INVALID"},
 		{hme.LoginComplete, hme.LoginTermsRequired, 412, 400, "ICLOUD_LOGIN_ACTION_REQUIRED"},
 		{hme.LoginOTP, hme.LoginRateLimited, 429, 429, "ICLOUD_LOGIN_RATE_LIMITED"},
