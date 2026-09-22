@@ -247,6 +247,7 @@ export default function AccountsPage() {
           open
           onClose={() => setLoginFor(null)}
           onSaved={() => {
+            setLoginFor(null)
             show('登录成功')
             void load()
           }}

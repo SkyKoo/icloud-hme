@@ -187,6 +187,8 @@ describe('AccountsPage', () => {
     await user.click(within(dialog).getByRole('button', { name: /验证/ }))
     await waitFor(() => expect(calls).toBe(2))
     expect(bodies).toEqual([{ password: 'p@ssw0rd' }, { otp_code: '123456' }])
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByRole('status', { name: '登录成功' })).toBeInTheDocument()
   })
 
   it('验证码会话过期后清空凭据并返回密码步骤', async () => {
