@@ -41,9 +41,9 @@ type OTPProvider func() (string, error)
 // authState 保存认证过程中的状态
 type authState struct {
 	username   string
-	password   string
 	frameId    string
 	clientId   string
+	challenge  string
 	authAttr   string
 	sessionID  string
 	scnt       string
@@ -59,17 +59,16 @@ type authState struct {
 func (c *Client) Login(username, password string, otpProvider OTPProvider) error {
 	state := &authState{
 		username: username,
-		password: password,
 	}
 
 	// 1. 初始化 frameId 和 clientId
 	if err := c.authStart(state); err != nil {
-		return fmt.Errorf("auth start: %w", err)
+		return WrapLoginError(LoginStart, err)
 	}
 
 	// 2. 提交用户名
 	if err := c.authFederate(state); err != nil {
-		return fmt.Errorf("auth federate: %w", err)
+		return WrapLoginError(LoginFederate, err)
 	}
 
 	// 3. SRP 协议初始化
@@ -80,17 +79,17 @@ func (c *Client) Login(username, password string, otpProvider OTPProvider) error
 	// 4. 获取 salt 和 B
 	authInitResp, err := c.authInit(state, base64.StdEncoding.EncodeToString(srpClient.GetABytes()))
 	if err != nil {
-		return fmt.Errorf("auth init: %w", err)
+		return WrapLoginError(LoginPassword, err)
 	}
 
 	// 5. 解码 salt 和 B
 	bDec, err := base64.StdEncoding.DecodeString(authInitResp.B)
 	if err != nil {
-		return fmt.Errorf("decode B: %w", err)
+		return &LoginError{Stage: LoginPassword, Kind: LoginInvalidResponse}
 	}
 	saltDec, err := base64.StdEncoding.DecodeString(authInitResp.Salt)
 	if err != nil {
-		return fmt.Errorf("decode salt: %w", err)
+		return &LoginError{Stage: LoginPassword, Kind: LoginInvalidResponse}
 	}
 
 	// 6. 生成密码密钥
@@ -102,17 +101,17 @@ func (c *Client) Login(username, password string, otpProvider OTPProvider) error
 
 	// 8. 提交 SRP 响应 (可能触发 2FA)
 	if err := c.authComplete(state, base64.StdEncoding.EncodeToString(srpClient.M1), base64.StdEncoding.EncodeToString(srpClient.M2), otpProvider); err != nil {
-		return fmt.Errorf("auth complete: %w", err)
+		return WrapLoginError(LoginComplete, err)
 	}
 
 	// 9. 信任设备
 	if err := c.getTrust(state); err != nil {
-		return fmt.Errorf("get trust: %w", err)
+		return WrapLoginError(LoginTrust, err)
 	}
 
 	// 10. 获取 iCloud Web 服务 Cookie
 	if err := c.authenticateWeb(state); err != nil {
-		return fmt.Errorf("authenticate web: %w", err)
+		return WrapLoginError(LoginWebSession, err)
 	}
 
 	// 11. 保存 Cookie 到 Client
@@ -144,7 +143,7 @@ func (c *Client) authStart(state *authState) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		return &HTTPStatusError{StatusCode: resp.StatusCode}
 	}
 
 	state.authAttr = resp.Header.Get("X-Apple-Auth-Attributes")
@@ -169,7 +168,7 @@ func (c *Client) authFederate(state *authState) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		return &HTTPStatusError{StatusCode: resp.StatusCode}
 	}
 	return nil
 }
@@ -210,10 +209,18 @@ func (c *Client) authInit(state *authState, a string) (*authInitResp, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		return nil, &HTTPStatusError{StatusCode: resp.StatusCode}
+	}
 	var result authInitResp
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		return nil, &LoginError{Stage: LoginPassword, Kind: LoginInvalidResponse}
 	}
+	if result.C == "" || result.Salt == "" || result.B == "" || result.Iteration <= 0 || result.Iteration > 1_000_000 {
+		return nil, &LoginError{Stage: LoginPassword, Kind: LoginInvalidResponse}
+	}
+	// complete 必须回传本次服务端挑战值，不能传 OAuth client ID。
+	state.challenge = result.C
 	return &result, nil
 }
 
@@ -224,7 +231,7 @@ func (c *Client) authComplete(state *authState, m1, m2 string, otpProvider OTPPr
 		"rememberMe":  true,
 		"trustTokens": []string{},
 		"m1":          m1,
-		"c":           state.clientId,
+		"c":           state.challenge,
 		"m2":          m2,
 	}
 
@@ -254,11 +261,11 @@ func (c *Client) authComplete(state *authState, m1, m2 string, otpProvider OTPPr
 		// 需要 2FA
 		return c.handleTwoFactor(state, resp, otpProvider)
 	case 403:
-		return fmt.Errorf("用户名或密码错误")
+		return &HTTPStatusError{StatusCode: resp.StatusCode}
 	case 412:
-		return fmt.Errorf("需要先在 appleid.apple.com 同意隐私条款")
+		return &LoginError{Stage: LoginComplete, Kind: LoginTermsRequired, Status: resp.StatusCode}
 	default:
-		return fmt.Errorf("auth complete 失败: HTTP %d", resp.StatusCode)
+		return &HTTPStatusError{StatusCode: resp.StatusCode}
 	}
 }
 
@@ -268,12 +275,12 @@ func (c *Client) handleTwoFactor(state *authState, signinResp *http.Response, ot
 	state.scnt = signinResp.Header.Get("scnt")
 
 	if otpProvider == nil {
-		return fmt.Errorf("账号启用了双重认证,需要提供 OTP")
+		return &LoginError{Stage: LoginOTP, Kind: LoginOTPRequired, Status: signinResp.StatusCode}
 	}
 
 	otp, err := otpProvider()
 	if err != nil {
-		return fmt.Errorf("获取 2FA 验证码失败: %w", err)
+		return WrapLoginError(LoginOTP, err)
 	}
 
 	// 提交 2FA 验证码
@@ -284,7 +291,7 @@ func (c *Client) handleTwoFactor(state *authState, signinResp *http.Response, ot
 	data, _ := json.Marshal(reqBody)
 	req, err := http.NewRequest("POST", fmt.Sprintf(submitSecurity, "trusteddevice"), bytes.NewReader(data))
 	if err != nil {
-		return err
+		return WrapLoginError(LoginOTP, err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -292,12 +299,12 @@ func (c *Client) handleTwoFactor(state *authState, signinResp *http.Response, ot
 
 	resp, err := c.httpc.Do(req)
 	if err != nil {
-		return err
+		return WrapLoginError(LoginOTP, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 204 {
-		return fmt.Errorf("2FA 验证失败: HTTP %d", resp.StatusCode)
+		return WrapLoginError(LoginOTP, &HTTPStatusError{StatusCode: resp.StatusCode})
 	}
 
 	if newScnt := resp.Header.Get("scnt"); newScnt != "" {
@@ -322,7 +329,7 @@ func (c *Client) getTrust(state *authState) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 204 {
-		return fmt.Errorf("trust 失败: HTTP %d", resp.StatusCode)
+		return &HTTPStatusError{StatusCode: resp.StatusCode}
 	}
 
 	state.authToken = resp.Header.Get("X-Apple-Session-Token")
@@ -351,7 +358,7 @@ func (c *Client) authenticateWeb(state *authState) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("auth web 失败: HTTP %d", resp.StatusCode)
+		return &HTTPStatusError{StatusCode: resp.StatusCode}
 	}
 
 	var result struct {
@@ -359,7 +366,9 @@ func (c *Client) authenticateWeb(state *authState) error {
 			Dsid string `json:"dsid"`
 		} `json:"dsInfo"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return &LoginError{Stage: LoginWebSession, Kind: LoginInvalidResponse}
+	}
 	state.dsid = result.DsInfo.Dsid
 
 	// 复制 idmsa.apple.com 的 Cookie 到 icloud.com

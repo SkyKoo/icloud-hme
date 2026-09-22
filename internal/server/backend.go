@@ -6,6 +6,8 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -162,6 +164,7 @@ func (b *managerBackend) LoginAccount(id, password, otpCode string) (account.Sum
 
 	client, err := b.mgr.HMEClientWithPassword(id, password, otpProvider)
 	if err != nil {
+		logLoginFailure(err)
 		return account.Summary{}, classifyLoginErr(err)
 	}
 	_ = client
@@ -174,20 +177,43 @@ func (b *managerBackend) LoginAccount(id, password, otpCode string) (account.Sum
 
 // classifyLoginErr 把 iCloud 登录错误映射为稳定错误。
 func classifyLoginErr(err error) *BackendError {
-	msg := err.Error()
-	if strings.Contains(msg, "需要提供 OTP") {
-		return &BackendError{Status: http.StatusConflict, Code: "OTP_REQUIRED", Message: "需要提供 OTP 验证码"}
+	var failure *hme.LoginError
+	if errors.As(err, &failure) {
+		detail := failure.Stage.Label()
+		if failure.Status != 0 {
+			detail += fmt.Sprintf("，Apple HTTP %d", failure.Status)
+		}
+		switch failure.Kind {
+		case hme.LoginOTPRequired:
+			return &BackendError{Status: 409, Code: "OTP_REQUIRED", Message: "请输入 Apple 受信任设备上的验证码"}
+		case hme.LoginOTPInvalid:
+			return &BackendError{Status: 401, Code: "OTP_INVALID", Message: "Apple 未接受验证码，请检查最新验证码后重试"}
+		case hme.LoginTermsRequired:
+			return &BackendError{Status: 400, Code: "ICLOUD_LOGIN_ACTION_REQUIRED", Message: "请先在 Apple 官方网站登录并完成账户提示或条款确认"}
+		case hme.LoginRateLimited:
+			return &BackendError{Status: 429, Code: "ICLOUD_LOGIN_RATE_LIMITED", Message: "Apple 暂时限制了登录尝试，请稍后再试（" + detail + "）"}
+		case hme.LoginRejected:
+			return &BackendError{Status: 401, Code: "ICLOUD_LOGIN_REJECTED", Message: "Apple 拒绝了本次登录（" + detail + "）；请检查 Apple 账户登录信息，或在 iCloud 官网登录确认账户状态"}
+		case hme.LoginInvalidResponse:
+			return &BackendError{Status: 502, Code: "ICLOUD_LOGIN_PROTOCOL_ERROR", Message: "iCloud 登录响应不符合预期（" + detail + "），请稍后重试"}
+		default:
+			return &BackendError{Status: 502, Code: "ICLOUD_LOGIN_FAILED", Message: "iCloud 登录未完成（" + detail + "），请稍后重试"}
+		}
 	}
-	if strings.Contains(msg, "2FA 验证失败") {
-		return &BackendError{Status: http.StatusUnauthorized, Code: "OTP_INVALID", Message: "OTP 验证码错误"}
+	if err.Error() == "账号不存在" || strings.HasPrefix(err.Error(), "账号不存在:") {
+		return &BackendError{Status: 404, Code: "ACCOUNT_NOT_FOUND", Message: "账号不存在"}
 	}
-	if strings.Contains(msg, "账号不存在") {
-		return &BackendError{Status: http.StatusNotFound, Code: "ACCOUNT_NOT_FOUND", Message: "账号不存在"}
+	return &BackendError{Status: 502, Code: "ICLOUD_LOGIN_FAILED", Message: "iCloud 登录未完成，请检查账号配置或稍后重试"}
+}
+
+// 不记录原始 error：它可能含邮箱、代理密码、URL 参数或 Apple 响应体。
+func logLoginFailure(err error) {
+	var failure *hme.LoginError
+	if errors.As(err, &failure) {
+		log.Printf("icloud_login_failed stage=%s kind=%s upstream_status=%d", failure.Stage, failure.Kind, failure.Status)
+		return
 	}
-	if isSessionError(msg) {
-		return &BackendError{Status: http.StatusUnauthorized, Code: "UPSTREAM_UNAUTHORIZED", Message: "iCloud 会话已失效，请到「账号」更新 Cookie 或重新登录 iCloud"}
-	}
-	return &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: "iCloud 登录失败,请稍后重试"}
+	log.Print("icloud_login_failed stage=account_setup kind=unknown")
 }
 
 // RemoveAccount 删除账号。

@@ -84,7 +84,7 @@ export async function request<T>(
   }
 
   // iCloud 与管理台是两套会话；更新 iCloud 凭据需要继续保留管理台登录。
-  if (resp.status === 401 && payload?.code !== 'UPSTREAM_UNAUTHORIZED') {
+  if (resp.status === 401 && !['UPSTREAM_UNAUTHORIZED', 'OTP_INVALID', 'ICLOUD_LOGIN_REJECTED'].includes(payload?.code ?? '')) {
     onUnauthorized?.()
     unauthorizedHandler?.()
   }

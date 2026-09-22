@@ -186,6 +186,27 @@ describe('AccountsPage', () => {
     await waitFor(() => expect(calls).toBe(2))
   })
 
+  it('iCloud 登录拒绝后可重试，取消后清空密码与错误', async () => {
+    server.use(
+      http.get('/api/accounts', () => HttpResponse.json({ success: true, data: accounts })),
+      http.post('/api/accounts/:id/login', () => HttpResponse.json(
+        { success: false, code: 'ICLOUD_LOGIN_REJECTED', message: 'Apple 拒绝了本次登录（建立登录连接，Apple HTTP 403）' },
+        { status: 401 },
+      )),
+    )
+    renderPage()
+    await screen.findByText('活跃号')
+    const user = userEvent.setup()
+    await user.click(screen.getAllByRole('button', { name: /iCloud 登录/ })[0])
+    await user.type(screen.getByLabelText('密码'), 'synthetic-password')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '登录' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('建立登录连接')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '取消' }))
+    await user.click(screen.getAllByRole('button', { name: /iCloud 登录/ })[0])
+    expect(screen.getByLabelText('密码')).toHaveValue('')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('App Password 提交后清空', async () => {
     let pwdBody = ''
     server.use(

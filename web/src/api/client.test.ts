@@ -77,6 +77,18 @@ describe('api client', () => {
     registerUnauthorizedHandler(null)
   })
 
+  it.each(['OTP_INVALID', 'ICLOUD_LOGIN_REJECTED'])('iCloud 登录错误 %s 不退出管理台', async (code) => {
+    const local = vi.fn()
+    const global = vi.fn()
+    registerUnauthorizedHandler(global)
+    server.use(http.post('/api/accounts/acc_1/login', () => HttpResponse.json(
+      { success: false, code, message: '请检查登录信息后重试' }, { status: 401 },
+    )))
+    await expect(request('/api/accounts/acc_1/login', { method: 'POST' }, local)).rejects.toMatchObject({ status: 401, code })
+    expect(local).not.toHaveBeenCalled()
+    expect(global).not.toHaveBeenCalled()
+  })
+
   it('Cloudflare 错误 JSON 不使用模糊提示或泄露代理细节', async () => {
     server.use(http.get('/api/aliases', () => HttpResponse.json(
       { type: 'about:blank', title: 'Bad Gateway', status: 502, detail: 'private upstream details' },

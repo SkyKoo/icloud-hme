@@ -22,6 +22,14 @@ export default function ICloudLoginDialog({
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
+  function handleClose() {
+    setPassword('')
+    setOtp('')
+    setOtpRequired(false)
+    setError('')
+    onClose()
+  }
+
   async function handleSubmit() {
     if (submitting) return
     setSubmitting(true)
@@ -53,14 +61,9 @@ export default function ICloudLoginDialog({
     <Dialog
       title="iCloud 登录"
       open={open}
-      onClose={() => {
-        setPassword('')
-        setOtp('')
-        setOtpRequired(false)
-        setError('')
-        onClose()
-      }}
+      onClose={handleClose}
     >
+      <p>请输入 Apple 账户的登录密码；App 专用密码仅用于收信。登录成功后会自动更新 Cookie。</p>
       {error && (
         <div className="alert-error" role="alert">
           {error}
@@ -96,7 +99,7 @@ export default function ICloudLoginDialog({
         </div>
       )}
       <div className="form-actions">
-        <button onClick={onClose}>取消</button>
+        <button onClick={handleClose}>取消</button>
         <button className="primary" onClick={() => void handleSubmit()} disabled={submitting}>
           {submitting ? '登录中…' : otpRequired ? '验证' : '登录'}
         </button>

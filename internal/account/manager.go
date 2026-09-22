@@ -506,7 +506,7 @@ func (m *Manager) HMEClientWithPassword(id, password string, otpProvider hme.OTP
 		return nil, fmt.Errorf("账号未设置邮箱地址")
 	}
 
-	client, err := hme.NewClient(nil, snap.Host, snap.Proxy, true)
+	client, err := hme.NewClient(nil, snap.Host, snap.Proxy, false)
 	if err != nil {
 		return nil, err
 	}
@@ -518,12 +518,12 @@ func (m *Manager) HMEClientWithPassword(id, password string, otpProvider hme.OTP
 	// 先保存 accountLogin 返回的 Cookie，随后通过 validate 刷新会话并再次持久化。
 	// 国区与美区都走同一条刷新链路，避免只保存登录阶段的临时 token。
 	if err := m.SaveCookies(id, client.Cookies); err != nil {
-		return nil, err
+		return nil, hme.WrapLoginError(hme.LoginSave, err)
 	}
 	if err := client.ValidateSession(); err != nil {
 		// validate 的失败响应也可能携带 Set-Cookie，尽量保留服务端最新状态。
 		_ = m.SaveCookies(id, client.Cookies)
-		return nil, err
+		return nil, hme.WrapLoginError(hme.LoginValidate, err)
 	}
 
 	// 保存 validate 刷新后的 Cookie 和账号状态。
@@ -546,7 +546,7 @@ func (m *Manager) HMEClientWithPassword(id, password string, otpProvider hme.OTP
 	saveErr := m.save()
 	m.mu.Unlock()
 	if saveErr != nil {
-		return nil, saveErr
+		return nil, hme.WrapLoginError(hme.LoginSave, saveErr)
 	}
 
 	return client, nil

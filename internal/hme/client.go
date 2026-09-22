@@ -293,15 +293,6 @@ func (c *Client) request(method, rawURL string, body any, timeout time.Duration,
 			}
 			cookieHeader := strings.Join(cookieParts, "; ")
 			req.Header.Set("Cookie", cookieHeader)
-			if c.Verbose {
-				c.log(">>> URL: %s", fullURL)
-				c.log(">>> Cookie: %s", cookieHeader[:min(200, len(cookieHeader))])
-				for k, vv := range req.Header {
-					for _, v := range vv {
-						c.log(">>> %s: %s", k, v[:min(100, len(v))])
-					}
-				}
-			}
 		}
 
 		resp, err := c.httpc.Do(req)
@@ -325,11 +316,7 @@ func (c *Client) request(method, rawURL string, body any, timeout time.Duration,
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			snippet := string(text)
-			if len(snippet) > 200 {
-				snippet = snippet[:200]
-			}
-			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, snippet)
+			lastErr = &HTTPStatusError{StatusCode: resp.StatusCode}
 			// iCloud 的 421 同样表示会话失效，重试不能恢复认证。
 			if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 421 {
 				return "", lastErr
@@ -401,11 +388,11 @@ func (c *Client) ValidateSession() error {
 			break
 		}
 		if i < len(validationURLs)-1 {
-			c.log("区域 validate 失败，改用全球端点: %v", err)
+			c.log("区域 validate 失败，改用全球端点")
 		}
 	}
 	if err != nil {
-		c.log("校验失败: %v", err)
+		c.log("会话校验失败")
 		return err
 	}
 	data := gjson.Parse(body)
