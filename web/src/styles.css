@@ -636,6 +636,238 @@ td .cell-secondary {
   }
 }
 
+/* ─── 收件箱：摘要优先，长地址不撑开列宽 ─── */
+.inbox-filters {
+  margin-bottom: var(--space-4);
+}
+
+.inbox-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) 88px 100px auto;
+  gap: var(--space-3);
+}
+
+.inbox-filter-grid .form-field {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.inbox-filter-grid select {
+  text-overflow: ellipsis;
+}
+
+.inbox-search {
+  display: flex;
+  align-items: flex-end;
+}
+
+.inbox-results-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.inbox-reading-hint {
+  margin-left: auto;
+}
+
+.inbox-table {
+  table-layout: fixed;
+}
+
+.inbox-col-folder { width: 88px; }
+.inbox-col-subject { width: 15%; }
+.inbox-col-address { width: 13%; }
+.inbox-col-date { width: 104px; }
+.inbox-col-actions { width: 48px; }
+
+.inbox-table th,
+.inbox-table td {
+  padding: 16px 10px;
+  vertical-align: top;
+}
+
+.inbox-table th {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.inbox-table .badge {
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.inbox-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.inbox-subject .link-button {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  font-weight: 500;
+  line-height: inherit;
+}
+
+.inbox-address,
+.inbox-date {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.inbox-date {
+  font-variant-numeric: tabular-nums;
+}
+
+.inbox-preview .inbox-clamp {
+  -webkit-line-clamp: 3;
+}
+
+.inbox-table .icon-button.danger {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  margin: -4px 0 0;
+  padding: 6px;
+  background: transparent;
+  color: var(--color-text-tertiary);
+}
+
+.inbox-table .icon-button.danger:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.mail-address {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 960px) {
+  .inbox-filter-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .inbox-search button {
+    width: 100%;
+  }
+
+  .inbox-table-wrap {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .inbox-table,
+  .inbox-table tbody {
+    display: block;
+  }
+
+  .inbox-table colgroup {
+    display: none;
+  }
+
+  /* 保留表头供辅助技术读取。 */
+  .inbox-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .inbox-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "folder date"
+      "subject subject"
+      "preview preview"
+      "from from"
+      "to actions";
+    gap: 10px 12px;
+    margin-bottom: 12px;
+    padding: 16px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-raised);
+  }
+
+  .inbox-table td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .inbox-folder { grid-area: folder; }
+  .inbox-subject { grid-area: subject; }
+  .inbox-preview { grid-area: preview; }
+  .inbox-from { grid-area: from; }
+  .inbox-to { grid-area: to; }
+  .inbox-actions {
+    grid-area: actions;
+    justify-self: end;
+  }
+
+  .inbox-table .inbox-to {
+    grid-column: 1 / -1;
+    padding-right: 48px;
+  }
+
+  .inbox-date {
+    grid-area: date;
+    align-self: center;
+    text-align: right;
+  }
+
+  .inbox-table .inbox-address {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .inbox-address::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    color: var(--color-text-tertiary);
+  }
+
+  .inbox-address .inbox-clamp {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .inbox-table .icon-button.danger {
+    width: 40px;
+    height: 40px;
+    margin: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .inbox-filters {
+    padding: 16px;
+  }
+
+  .inbox-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .inbox-reading-hint {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+}
+
 /* ─── Dialog ─── */
 .dialog-backdrop {
   position: fixed;

@@ -208,9 +208,9 @@ export default function InboxPage() {
         </div>
       </div>
 
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
-          <div className="form-field" style={{ marginBottom: 0 }}>
+      <div className="card inbox-filters">
+        <div className="inbox-filter-grid">
+          <div className="form-field">
             <label htmlFor="inbox-account">账号</label>
             <select
               id="inbox-account"
@@ -224,7 +224,7 @@ export default function InboxPage() {
               ))}
             </select>
           </div>
-          <div className="form-field" style={{ marginBottom: 0 }}>
+          <div className="form-field">
             <label htmlFor="inbox-folder">邮件范围</label>
             <select id="inbox-folder" value={folder} disabled={!accountId} onChange={(e) => handleFolderChange(e.target.value)}>
               <option value="all">收件箱＋垃圾邮件</option>
@@ -232,7 +232,7 @@ export default function InboxPage() {
               <option value="junk">垃圾邮件</option>
             </select>
           </div>
-          <div className="form-field" style={{ marginBottom: 0 }}>
+          <div className="form-field">
             <label htmlFor="inbox-alias">别名</label>
             <select
               id="inbox-alias"
@@ -247,7 +247,7 @@ export default function InboxPage() {
               ))}
             </select>
           </div>
-          <div className="form-field" style={{ marginBottom: 0 }}>
+          <div className="form-field">
             <label htmlFor="inbox-limit">每页</label>
             <select
               id="inbox-limit"
@@ -259,7 +259,7 @@ export default function InboxPage() {
               <option value={100}>100</option>
             </select>
           </div>
-          <div className="form-field" style={{ marginBottom: 0 }}>
+          <div className="form-field">
             <label htmlFor="inbox-days">时间范围</label>
             <select
               id="inbox-days"
@@ -272,7 +272,7 @@ export default function InboxPage() {
               <option value={90}>90 天</option>
             </select>
           </div>
-          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+          <div className="inbox-search">
             <button className="primary" onClick={handleSearch}>
               查询
             </button>
@@ -292,34 +292,52 @@ export default function InboxPage() {
       >
         {result && result.messages.length > 0 && (
           <>
-            <p className="hint" style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <p className="hint inbox-results-meta">
               <span>共 {result.count} 封</span>
               <span className={result.method === 'imap' ? 'badge badge-info' : 'badge badge-neutral'}>
                 {result.method === 'imap' ? <IconKey size={12} /> : <IconMail size={12} />}
                 读取方式：{methodText}
               </span>
+              <span className="inbox-reading-hint">点击主题查看完整邮件</span>
             </p>
-            <div className="table-wrap">
-              <table>
+            <div className="table-wrap inbox-table-wrap">
+              <table className="inbox-table" aria-label="邮件摘要" role="table">
+                <colgroup>
+                  <col className="inbox-col-folder" />
+                  <col className="inbox-col-subject" />
+                  <col className="inbox-col-address" />
+                  <col className="inbox-col-address" />
+                  <col className="inbox-col-date" />
+                  <col />
+                  <col className="inbox-col-actions" />
+                </colgroup>
                 <thead>
                   <tr>
-                    <th>来源</th>
-                    <th>主题</th>
-                    <th>发件人</th>
-                    <th>收件人</th>
-                    <th>日期</th>
-                    <th>摘要</th>
+                    <th scope="col">来源</th>
+                    <th scope="col">主题</th>
+                    <th scope="col">发件人</th>
+                    <th scope="col">收件人</th>
+                    <th scope="col">日期</th>
+                    <th scope="col">摘要</th>
+                    <th scope="col"><span className="visually-hidden">操作</span></th>
                   </tr>
                 </thead>
                 <tbody>
                   {result.messages.map((m) => (
                     <tr key={`${m.folder ?? 'inbox'}:${m.id}`}>
-                      <td><span className={m.folder === 'junk' ? 'badge badge-pending' : 'badge badge-neutral'}>{m.folder === 'junk' ? '垃圾邮件' : '收件箱'}</span></td>
-                      <td><button className="link-button" onClick={() => void openMessage(m, result.method)}>{m.subject || '（无主题）'}</button></td>
-                      <td>{m.from}</td>
-                      <td>{m.to}</td>
-                      <td>{formatDate(m.date)}</td>
-                      <td>{m.preview || '—'} {result.method === 'imap' && <button className="icon-button danger" aria-label="删除邮件" title="删除邮件" onClick={() => setDeleteFor(m)}><IconTrash size={14} /></button>}</td>
+                      <td className="inbox-folder"><span className={m.folder === 'junk' ? 'badge badge-pending' : 'badge badge-neutral'}>{m.folder === 'junk' ? '垃圾邮件' : '收件箱'}</span></td>
+                      <td className="inbox-subject">
+                        <button className="link-button" title={m.subject || '（无主题）'} onClick={() => void openMessage(m, result.method)}>
+                          <span className="inbox-clamp">{m.subject || '（无主题）'}</span>
+                        </button>
+                      </td>
+                      <td className="inbox-from inbox-address" data-label="发件人"><span className="inbox-clamp" title={m.from}>{m.from || '—'}</span></td>
+                      <td className="inbox-to inbox-address" data-label="收件人"><span className="inbox-clamp" title={m.to}>{m.to || '—'}</span></td>
+                      <td className="inbox-date"><time dateTime={m.date}>{formatDate(m.date)}</time></td>
+                      <td className="inbox-preview"><span className="inbox-clamp">{m.preview || '—'}</span></td>
+                      <td className="inbox-actions">
+                        {result.method === 'imap' && <button className="icon-button danger" aria-label="删除邮件" title="删除邮件" onClick={() => setDeleteFor(m)}><IconTrash size={16} /></button>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -331,8 +349,8 @@ export default function InboxPage() {
       <Dialog title={detail?.subject || '邮件详情'} open={detail !== null || detailLoading} onClose={() => setDetail(null)}>
         {detailLoading && <p className="hint">读取中…</p>}
         {detail && <>
-          <p className="hint">发件人：{detail.from}</p>
-          <p className="hint">收件人：{detail.to}</p>
+          <p className="hint mail-address">发件人：{detail.from}</p>
+          <p className="hint mail-address">收件人：{detail.to}</p>
           <p className="hint">日期：{formatDate(detail.date)}</p>
           <pre className="mail-body">{detail.body || '无正文'}</pre>
           <div className="form-actions">{detailMethod === 'imap' && <button className="danger" onClick={() => setDeleteFor(detail)}>删除邮件</button>}<button onClick={() => setDetail(null)}>关闭</button></div>
