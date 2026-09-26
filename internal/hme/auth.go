@@ -168,7 +168,7 @@ func (c *Client) authStart(state *authState) error {
 	state.captureHeaders(resp.Header)
 
 	if resp.StatusCode != 200 {
-		return &HTTPStatusError{StatusCode: resp.StatusCode}
+		return &HTTPStatusError{StatusCode: resp.StatusCode, RetryAfter: NormalizeRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 
 	return nil
@@ -193,7 +193,7 @@ func (c *Client) authFederate(state *authState) error {
 	state.captureHeaders(resp.Header)
 
 	if resp.StatusCode != 200 {
-		return &HTTPStatusError{StatusCode: resp.StatusCode}
+		return &HTTPStatusError{StatusCode: resp.StatusCode, RetryAfter: NormalizeRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 	return nil
 }
@@ -236,7 +236,7 @@ func (c *Client) authInit(state *authState, a string) (*authInitResp, error) {
 	state.captureHeaders(resp.Header)
 
 	if resp.StatusCode != 200 {
-		return nil, &HTTPStatusError{StatusCode: resp.StatusCode}
+		return nil, &HTTPStatusError{StatusCode: resp.StatusCode, RetryAfter: NormalizeRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 	var result authInitResp
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -288,11 +288,11 @@ func (c *Client) authComplete(state *authState, m1, m2 string, otpProvider OTPPr
 		// 需要 2FA
 		return c.handleTwoFactor(state, resp, otpProvider)
 	case 403:
-		return &HTTPStatusError{StatusCode: resp.StatusCode}
+		return &HTTPStatusError{StatusCode: resp.StatusCode, RetryAfter: NormalizeRetryAfter(resp.Header.Get("Retry-After"))}
 	case 412:
 		return &LoginError{Stage: LoginComplete, Kind: LoginTermsRequired, Status: resp.StatusCode}
 	default:
-		return &HTTPStatusError{StatusCode: resp.StatusCode}
+		return &HTTPStatusError{StatusCode: resp.StatusCode, RetryAfter: NormalizeRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 }
 
@@ -336,7 +336,7 @@ func (c *Client) verifyOTP(state *authState, otp string) error {
 	state.captureHeaders(resp.Header)
 
 	if resp.StatusCode != 204 {
-		return WrapLoginError(LoginOTP, &HTTPStatusError{StatusCode: resp.StatusCode})
+		return WrapLoginError(LoginOTP, &HTTPStatusError{StatusCode: resp.StatusCode, RetryAfter: NormalizeRetryAfter(resp.Header.Get("Retry-After"))})
 	}
 
 	return nil
@@ -359,7 +359,7 @@ func (c *Client) getTrust(state *authState) error {
 	state.captureHeaders(resp.Header)
 
 	if resp.StatusCode != 204 {
-		return &HTTPStatusError{StatusCode: resp.StatusCode}
+		return &HTTPStatusError{StatusCode: resp.StatusCode, RetryAfter: NormalizeRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 
 	return nil
@@ -399,7 +399,7 @@ func (c *Client) authenticateWeb(state *authState) error {
 	state.captureHeaders(resp.Header)
 
 	if resp.StatusCode != 200 {
-		return &HTTPStatusError{StatusCode: resp.StatusCode}
+		return &HTTPStatusError{StatusCode: resp.StatusCode, RetryAfter: NormalizeRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 
 	var result struct {

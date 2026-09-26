@@ -18,9 +18,12 @@ import (
 
 // BackendError 是后端返回的稳定错误,携带 HTTP 状态码与稳定错误码。
 type BackendError struct {
-	Status  int
-	Code    string
-	Message string
+	Status         int
+	Code           string
+	Message        string
+	Stage          string
+	UpstreamStatus int
+	RetryAfter     string
 }
 
 func (e *BackendError) Error() string { return e.Message }
@@ -159,7 +162,14 @@ func (b *managerBackend) LoginAccount(id, sessionID, password, otpCode string) (
 	sum, err := b.mgr.LoginAccount(id, sessionID, password, otpCode)
 	if err != nil {
 		logLoginFailure(err)
-		return account.Summary{}, classifyLoginErr(err)
+		failure := classifyLoginErr(err)
+		var login *hme.LoginError
+		if errors.As(err, &login) {
+			failure.Stage = login.Stage.String()
+			failure.UpstreamStatus = login.Status
+			failure.RetryAfter = hme.NormalizeRetryAfter(login.RetryAfter)
+		}
+		return account.Summary{}, failure
 	}
 	return sum, nil
 }
@@ -383,15 +393,50 @@ func mapAccountErr(err error) *BackendError {
 	return &BackendError{Status: http.StatusBadRequest, Code: "VALIDATION_ERROR", Message: msg}
 }
 
-// classifyUpstreamErr 把上游 (iCloud) 错误映射为稳定错误,不拼接上游响应体。
+// classifyUpstreamErr 先使用类型化元数据；未知错误不推断为限流。
 func classifyUpstreamErr(fixedMsg string, err error) *BackendError {
 	if err == nil {
 		return nil
 	}
-	if isSessionError(err.Error()) {
-		return &BackendError{Status: http.StatusUnauthorized, Code: "UPSTREAM_UNAUTHORIZED", Message: "iCloud 会话已失效，请到「账号」更新 Cookie 或重新登录 iCloud"}
+	var upstream *hme.UpstreamError
+	if errors.As(err, &upstream) {
+		result := &BackendError{Status: 502, Code: "UPSTREAM_FAILURE", Message: fixedMsg,
+			Stage: upstream.Stage.String(), UpstreamStatus: upstream.Status, RetryAfter: hme.NormalizeRetryAfter(upstream.RetryAfter)}
+		switch upstream.Kind {
+		case hme.UpstreamRateLimited:
+			result.Status, result.Code, result.Message = 429, "UPSTREAM_RATE_LIMITED", "iCloud 暂时限制了请求，请等待后再试"
+		case hme.UpstreamSessionExpired:
+			// 保留旧错误码，兼容已有客户端，避免退出 HME 管理员会话。
+			result.Status, result.Code, result.Message = 401, "UPSTREAM_UNAUTHORIZED", "iCloud 会话已失效，请到「账号」更新 Cookie 或重新登录 iCloud"
+		case hme.UpstreamUnavailable:
+			result.Status, result.Code, result.Message = 503, "UPSTREAM_UNAVAILABLE", "iCloud 服务暂时不可用，请稍后重试"
+		case hme.UpstreamNetwork:
+			result.Code, result.Message = "UPSTREAM_NETWORK_ERROR", "HME 连接 iCloud 失败，请稍后重试"
+		case hme.UpstreamTimeout:
+			result.Status, result.Code, result.Message = 504, "UPSTREAM_TIMEOUT", "HME 请求 iCloud 超时，请稍后重试"
+		case hme.UpstreamInvalidResponse:
+			result.Code, result.Message = "UPSTREAM_INVALID_RESPONSE", "iCloud 返回了无法识别的响应，请稍后重试"
+		case hme.UpstreamRejected:
+			result.Code = "UPSTREAM_REJECTED"
+			if upstream.Stage == hme.StageGenerate || upstream.Stage == hme.StageReserve {
+				result.Code, result.Message = "ALIAS_CREATE_FAILED", "iCloud 未完成别名创建；当前响应不能确定是否限流"
+			}
+		}
+		result.Message += "（" + upstream.Stage.Label()
+		if upstream.Status != 0 {
+			result.Message += fmt.Sprintf("，Apple HTTP %d", upstream.Status)
+		}
+		result.Message += "）"
+		if result.RetryAfter != "" {
+			result.Message += "；重试等待：" + result.RetryAfter
+		}
+		return result
 	}
-	return &BackendError{Status: http.StatusBadGateway, Code: "UPSTREAM_FAILURE", Message: fixedMsg}
+	// 旧 Web 邮件客户端尚未提供结构化错误，保留其会话失效识别。
+	if isSessionError(err.Error()) {
+		return &BackendError{Status: 401, Code: "UPSTREAM_UNAUTHORIZED", Message: "iCloud 会话已失效，请到「账号」更新 Cookie 或重新登录 iCloud"}
+	}
+	return &BackendError{Status: 502, Code: "UPSTREAM_FAILURE", Message: fixedMsg}
 }
 
 // isSessionError 判断错误是否由会话失效引起。

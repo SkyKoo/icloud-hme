@@ -298,7 +298,7 @@ func (c *Client) request(method, rawURL string, body any, timeout time.Duration,
 
 		resp, err := c.httpc.Do(req)
 		if err != nil {
-			lastErr = fmt.Errorf("连接失败: %w", err)
+			lastErr = newTransportError(err)
 			if attempt < maxAttempts {
 				c.sleepRetry(attempt)
 				continue
@@ -306,20 +306,23 @@ func (c *Client) request(method, rawURL string, body any, timeout time.Duration,
 			return "", lastErr
 		}
 
-		text, _ := io.ReadAll(resp.Body)
+		text, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
 		// 从 Set-Cookie 响应头更新 Cookie（模拟浏览器行为,iCloud 会刷新 token）
 		for _, sc := range resp.Cookies() {
 			if sc.Name != "" && sc.Value != "" {
+				if c.Cookies == nil {
+					c.Cookies = make(map[string]string)
+				}
 				c.Cookies[sc.Name] = sc.Value
 			}
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			lastErr = &HTTPStatusError{StatusCode: resp.StatusCode}
-			// iCloud 的 421 同样表示会话失效，重试不能恢复认证。
-			if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 421 {
+			lastErr = &HTTPStatusError{StatusCode: resp.StatusCode, RetryAfter: NormalizeRetryAfter(resp.Header.Get("Retry-After"))}
+			// 会话失效和限流不立即重试；有等待提示时由调用方决定何时重试。
+			if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 421 || resp.StatusCode == 429 || NormalizeRetryAfter(resp.Header.Get("Retry-After")) != "" {
 				return "", lastErr
 			}
 			if attempt < maxAttempts {
@@ -329,6 +332,9 @@ func (c *Client) request(method, rawURL string, body any, timeout time.Duration,
 			return "", lastErr
 		}
 
+		if readErr != nil {
+			return "", newTransportError(readErr)
+		}
 		return string(text), nil
 	}
 	if lastErr != nil {
@@ -379,14 +385,18 @@ func (c *Client) ValidateSession() error {
 		var candidate string
 		candidate, err = c.request("POST", validationURL, nil, 20*time.Second, MaxRetries)
 		if err == nil && !gjson.Valid(candidate) {
-			err = fmt.Errorf("invalid JSON response")
+			err = &UpstreamError{Stage: StageValidate, Kind: UpstreamInvalidResponse, Status: 200}
 		}
 		if err == nil && gjson.Get(candidate, "webservices.premiummailsettings.url").String() == "" {
-			err = fmt.Errorf("validate 响应缺少 Hide My Email 服务端点")
+			err = &UpstreamError{Stage: StageValidate, Kind: UpstreamInvalidResponse, Status: 200}
 		}
 		if err == nil {
 			body = candidate
 			break
+		}
+		failure := wrapUpstream(StageValidate, err)
+		if failure.Kind == UpstreamRateLimited || failure.RetryAfter != "" {
+			return failure
 		}
 		if i < len(validationURLs)-1 {
 			c.log("区域 validate 失败，改用全球端点")
@@ -394,7 +404,7 @@ func (c *Client) ValidateSession() error {
 	}
 	if err != nil {
 		c.log("会话校验失败")
-		return err
+		return wrapUpstream(StageValidate, err)
 	}
 	data := gjson.Parse(body)
 	serviceURL := data.Get("webservices.premiummailsettings.url").String()
@@ -460,7 +470,13 @@ func (c *Client) ListAliases() ([]Alias, error) {
 	c.log("获取别名列表...")
 	body, err := c.request("GET", c.serviceURL+"/v2/hme/list", nil, 0, MaxRetries)
 	if err != nil {
-		return nil, err
+		return nil, wrapUpstream(StageList, err)
+	}
+	if !gjson.Valid(body) {
+		return nil, &UpstreamError{Stage: StageList, Kind: UpstreamInvalidResponse, Status: 200}
+	}
+	if gjson.Get(body, "success").Exists() && !gjson.Get(body, "success").Bool() {
+		return nil, &UpstreamError{Stage: StageList, Kind: UpstreamRejected, Status: 200}
 	}
 	aliases := parseAliasList(body)
 	c.log("共 %d 个别名", len(aliases))
@@ -473,16 +489,22 @@ func (c *Client) Generate() (string, error) {
 		return "", err
 	}
 	c.log("生成候选别名...")
-	body, err := c.request("POST", c.serviceURL+"/v1/hme/generate", map[string]string{"langCode": "en-us"}, 0, 2)
+	body, err := c.request("POST", c.serviceURL+"/v1/hme/generate", map[string]string{"langCode": "en-us"}, 0, 1)
 	if err != nil {
-		return "", err
+		return "", wrapUpstream(StageGenerate, err)
+	}
+	if !gjson.Valid(body) {
+		return "", &UpstreamError{Stage: StageGenerate, Kind: UpstreamInvalidResponse, Status: 200}
 	}
 	parsed := gjson.Parse(body)
 	if !parsed.Get("success").Bool() {
-		errMsg := parsed.Get("error.errorMessage").String()
-		return "", fmt.Errorf("生成失败: %s", nonEmpty(errMsg, "unknown"))
+		return "", &UpstreamError{Stage: StageGenerate, Kind: UpstreamRejected, Status: 200}
 	}
-	hme := parsed.Get("result.hme").String()
+	value := parsed.Get("result.hme")
+	hme := ""
+	if value.Type == gjson.String {
+		hme = value.String()
+	}
 	if hme == "" {
 		// 某些响应把 hme 包在嵌套对象里
 		hme = parsed.Get("result.hme.hme").String()
@@ -490,7 +512,10 @@ func (c *Client) Generate() (string, error) {
 			hme = parsed.Get("result.hme.email").String()
 		}
 	}
-	c.log("候选: %s", hme)
+	if hme == "" {
+		return "", &UpstreamError{Stage: StageGenerate, Kind: UpstreamInvalidResponse, Status: 200}
+	}
+	c.log("候选生成成功")
 	return hme, nil
 }
 
@@ -508,14 +533,16 @@ func (c *Client) Reserve(hme, label string) (string, error) {
 		"label": label,
 		"note":  "Created by icloud_hme tool",
 	}
-	body, err := c.request("POST", c.serviceURL+"/v1/hme/reserve", payload, 0, 2)
+	body, err := c.request("POST", c.serviceURL+"/v1/hme/reserve", payload, 0, 1)
 	if err != nil {
-		return "", err
+		return "", wrapUpstream(StageReserve, err)
+	}
+	if !gjson.Valid(body) {
+		return "", &UpstreamError{Stage: StageReserve, Kind: UpstreamInvalidResponse, Status: 200}
 	}
 	parsed := gjson.Parse(body)
 	if !parsed.Get("success").Bool() {
-		errMsg := parsed.Get("error.errorMessage").String()
-		return "", fmt.Errorf("保留失败: %s", nonEmpty(errMsg, "unknown"))
+		return "", &UpstreamError{Stage: StageReserve, Kind: UpstreamRejected, Status: 200}
 	}
 	alias := hme
 	resultHme := parsed.Get("result.hme")
@@ -535,51 +562,18 @@ type CreateResult struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// CreateAlias 一步完成「生成 + 保留」,创建一个新别名。
-//
-// 由于 generate / reserve 偶发失败,内部会重试 maxRetries 次,
-// 每次重试会重置 serviceURL 强制重新校验会话。
-func (c *Client) CreateAlias(label string, maxRetries int) (*CreateResult, error) {
-	if maxRetries <= 0 {
-		maxRetries = 5
+// CreateAlias 一步完成「生成 + 保留」。maxRetries 为兼容旧调用保留。
+// 创建可能已在上游成功；失败时不重放整个流程，避免重复创建或加剧限流。
+func (c *Client) CreateAlias(label string, _ int) (*CreateResult, error) {
+	candidate, err := c.Generate()
+	if err != nil {
+		return nil, err
 	}
-	var lastErr string
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			c.serviceURL = ""
-			c.setupURL = ""
-			c.log("重试 %d/%d ...", attempt+1, maxRetries)
-		}
-		hme, err := c.Generate()
-		if err != nil {
-			lastErr = "generate 失败: " + err.Error()
-			c.log("%s", lastErr)
-			if attempt < maxRetries-1 {
-				time.Sleep(time.Second)
-				continue
-			}
-			break
-		}
-		email, err := c.Reserve(hme, label)
-		if err != nil {
-			lastErr = err.Error()
-			c.log("reserve 失败: %s", lastErr)
-			if attempt < maxRetries-1 {
-				time.Sleep(time.Second)
-				continue
-			}
-			break
-		}
-		return &CreateResult{
-			Email:     email,
-			Label:     label,
-			CreatedAt: time.Now().Format(time.RFC3339),
-		}, nil
+	email, err := c.Reserve(candidate, label)
+	if err != nil {
+		return nil, err
 	}
-	if lastErr != "" {
-		return nil, fmt.Errorf("创建别名失败: %s", lastErr)
-	}
-	return nil, fmt.Errorf("创建别名失败,已重试 %d 次", maxRetries)
+	return &CreateResult{Email: email, Label: label, CreatedAt: time.Now().Format(time.RFC3339)}, nil
 }
 
 // DeactivateHME 停用别名(可恢复)。
@@ -591,7 +585,7 @@ func (c *Client) DeactivateHME(anonymousID string) (bool, error) {
 	payload := map[string]string{"anonymousId": anonymousID}
 	body, err := c.request("POST", c.serviceURL+"/v1/hme/deactivate", payload, 0, 2)
 	if err != nil {
-		return false, err
+		return false, wrapUpstream(StageDeactivate, err)
 	}
 	return gjson.Get(body, "success").Bool(), nil
 }
@@ -605,7 +599,7 @@ func (c *Client) ReactivateHME(anonymousID string) (bool, error) {
 	payload := map[string]string{"anonymousId": anonymousID}
 	body, err := c.request("POST", c.serviceURL+"/v1/hme/reactivate", payload, 0, 2)
 	if err != nil {
-		return false, err
+		return false, wrapUpstream(StageReactivate, err)
 	}
 	return gjson.Get(body, "success").Bool(), nil
 }
@@ -626,7 +620,7 @@ func (c *Client) Delete(anonymousID string) error {
 		_, _ = c.request("POST", c.serviceURL+"/v1/hme/deactivate", payload, 0, 2)
 		body, err = doDelete()
 		if err != nil {
-			return err
+			return wrapUpstream(StageDelete, err)
 		}
 		if !gjson.Get(body, "success").Bool() {
 			return fmt.Errorf("%s", gjson.Get(body, "error.errorMessage").String())

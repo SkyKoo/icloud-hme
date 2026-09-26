@@ -50,9 +50,10 @@ func (k LoginFailure) String() string {
 
 // LoginError 只携带枚举和状态码；不持有原始响应、密码、Cookie 或代理 URL。
 type LoginError struct {
-	Stage  LoginStage
-	Kind   LoginFailure
-	Status int
+	Stage      LoginStage
+	Kind       LoginFailure
+	Status     int
+	RetryAfter string
 }
 
 func (e *LoginError) Error() string {
@@ -60,7 +61,10 @@ func (e *LoginError) Error() string {
 }
 
 // HTTPStatusError 不把可能含 Cookie/令牌的上游响应体放进错误字符串。
-type HTTPStatusError struct{ StatusCode int }
+type HTTPStatusError struct {
+	StatusCode int
+	RetryAfter string
+}
 
 func (e *HTTPStatusError) Error() string { return fmt.Sprintf("HTTP %d", e.StatusCode) }
 
@@ -74,6 +78,7 @@ func WrapLoginError(stage LoginStage, err error) *LoginError {
 	var response *HTTPStatusError
 	if errors.As(err, &response) {
 		result.Status = response.StatusCode
+		result.RetryAfter = NormalizeRetryAfter(response.RetryAfter)
 		switch response.StatusCode {
 		case 429:
 			result.Kind = LoginRateLimited
@@ -82,6 +87,19 @@ func WrapLoginError(stage LoginStage, err error) *LoginError {
 		}
 		if stage == LoginOTP && (response.StatusCode == 400 || response.StatusCode == 401 || response.StatusCode == 403 || response.StatusCode == 422) {
 			result.Kind = LoginOTPInvalid
+		}
+	}
+	var upstream *UpstreamError
+	if errors.As(err, &upstream) {
+		result.Status = upstream.Status
+		result.RetryAfter = NormalizeRetryAfter(upstream.RetryAfter)
+		switch upstream.Kind {
+		case UpstreamRateLimited:
+			result.Kind = LoginRateLimited
+		case UpstreamSessionExpired:
+			result.Kind = LoginRejected
+		case UpstreamInvalidResponse:
+			result.Kind = LoginInvalidResponse
 		}
 	}
 	return result
